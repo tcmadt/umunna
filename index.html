@@ -375,47 +375,19 @@ select option{background:var(--bg2);}
 <div id="toast"></div>
 
 <script>
-// ═══════════════════════════════════════════
-//  FAMILY DATA — Offorbuike / Madu Records
-// ═══════════════════════════════════════════
-
-// @@BASE_PEOPLE_START@@
-const BASE_PEOPLE = {
-  "1": {
-    "name": "Umenaruba",
-    "title": "",
-    "g": "m",
-    "pIds": [],
-    "sIds": [],
-    "nicks": [],
-    "notes": "",
-    "rel": "distant"
-  },
-  "2": {
-    "name": "Nwagharaku",
-    "title": "",
-    "g": "m",
-    "pIds": [],
-    "sIds": [],
-    "nicks": [],
-    "notes": "",
-    "rel": "distant"
-  }
-};
-// @@BASE_PEOPLE_END@@
-
-// Working copy — historian edits merge here
-let P = JSON.parse(JSON.stringify(BASE_PEOPLE));
-// Added members go here (unplaced in SVG)
+// Working copy — loaded live from Google Sheets
+let P = {};
 let EXTRA_MEMBERS = {};
 let NEXT_ID = 100;
-// Suggestions queue
-const SHEETS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec';
 let SUGGESTIONS = [];
 let HISTORIAN_MODE = false;
 let _centerId = 0;
 let _searchHits = new Set();
 let _searchIds = [];
+
+// ── GOOGLE SHEETS ENDPOINT ──
+// Your Apps Script Web App URL (handles both GET for data and POST for suggestions)
+const SHEETS_ENDPOINT = 'YOUR_APPS_SCRIPT_URL_HERE';
 
 function enterTree(){
   document.getElementById('view-welcome').style.display='none';
@@ -825,18 +797,18 @@ function submitSuggestion(){
     status:'pending'
   });
   saveSuggestions();
-updateBadge();
+  updateBadge();
 
-// Also send to Google Sheets
-fetch(SHEETS_ENDPOINT, {
-  method: 'POST',
-  body: JSON.stringify({
-    type: _suggestType,
-    summary,
-    from,
-    notes
-  })
-}).catch(() => {}); // fail silently — local storage is the backup
+  // Send to Google Sheets — no-cors avoids the CORS block on Apps Script redirects
+  if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec'){
+    fetch(SHEETS_ENDPOINT, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type:_suggestType, summary, from, notes })
+    }).catch(()=>{}); // fail silently — local queue is the backup
+  }
+
   closeModal('modal-suggest');
   showToast('Suggestion submitted — the Historian will review it ✓');
 }
@@ -979,9 +951,64 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); cons
 // ── INIT ──
 async function init(){
   await loadStorage();
-  renderTree();
-  setTimeout(()=>scrollToNode(0), 200);
+
+  // Show loading state while fetching from Sheets
+  if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'YOUR_APPS_SCRIPT_URL_HERE'){
+    showLoader(true);
+    try {
+      const resp = await fetch(SHEETS_ENDPOINT);
+      const data = await resp.json();
+      // Merge fetched data into P, preserving any local EXTRA_MEMBERS
+      P = {};
+      Object.keys(data).forEach(id => {
+        const person = data[id];
+        // Ensure arrays are proper arrays (JSON parsing can sometimes stringify them)
+        P[id] = {
+          ...person,
+          pIds: Array.isArray(person.pIds) ? person.pIds : [],
+          sIds: Array.isArray(person.sIds) ? person.sIds : [],
+          nicks: Array.isArray(person.nicks) ? person.nicks : [],
+        };
+      });
+      showLoader(false);
+      renderTree();
+      renderMembers();
+      renderDiscover();
+      setTimeout(()=>scrollToNode(findYouNode()), 200);
+    } catch(err) {
+      showLoader(false);
+      showToast('Could not load family data. Check your endpoint URL.');
+      console.error('Fetch error:', err);
+    }
+  } else {
+    // No endpoint set — show a clear message
+    showToast('⚠ Set SHEETS_ENDPOINT in the HTML to load family data');
+  }
 }
+
+function findYouNode(){
+  // Find the node with rel='you', fall back to first key
+  const youId = Object.keys(P).find(id => P[id].rel === 'you');
+  return youId !== undefined ? parseInt(youId) : parseInt(Object.keys(P)[0] || '0');
+}
+
+function showLoader(on){
+  let el = document.getElementById('tree-loader');
+  if(on && !el){
+    el = document.createElement('div');
+    el.id = 'tree-loader';
+    el.style.cssText = 'position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(12,7,2,.92);';
+    el.innerHTML = `
+      <div style="font-family:\'Fraunces\',serif;font-size:2rem;color:#E8BF60;margin-bottom:1rem;">Umunna</div>
+      <div style="width:40px;height:40px;border:3px solid #3A1E0C;border-top-color:#D08A25;border-radius:50%;animation:spin .8s linear infinite;"></div>
+      <div style="margin-top:1rem;font-size:.8rem;color:#8A7060;letter-spacing:.1em;">Loading family tree…</div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+    document.body.appendChild(el);
+  } else if(!on && el){
+    el.remove();
+  }
+}
+
 init();
 </script>
 </div><!-- end view-tree -->
