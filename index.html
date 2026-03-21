@@ -447,6 +447,7 @@ let P = JSON.parse(JSON.stringify(BASE_PEOPLE));
 let EXTRA_MEMBERS = {};
 let NEXT_ID = 100;
 // Suggestions queue
+const SHEETS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec';
 let SUGGESTIONS = [];
 let HISTORIAN_MODE = false;
 let _centerId = 0;
@@ -861,7 +862,18 @@ function submitSuggestion(){
     status:'pending'
   });
   saveSuggestions();
-  updateBadge();
+updateBadge();
+
+// Also send to Google Sheets
+fetch(SHEETS_ENDPOINT, {
+  method: 'POST',
+  body: JSON.stringify({
+    type: _suggestType,
+    summary,
+    from,
+    notes
+  })
+}).catch(() => {}); // fail silently — local storage is the backup
   closeModal('modal-suggest');
   showToast('Suggestion submitted — the Historian will review it ✓');
 }
