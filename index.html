@@ -800,7 +800,7 @@ function submitSuggestion(){
   updateBadge();
 
   // Send to Google Sheets — no-cors avoids the CORS block on Apps Script redirects
-  if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec'){
+  if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'YOUR_APPS_SCRIPT_URL_HERE'){
     fetch(SHEETS_ENDPOINT, {
       method: 'POST',
       mode: 'no-cors',
