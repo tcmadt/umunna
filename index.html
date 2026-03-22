@@ -984,7 +984,7 @@ async function init(){
 
   if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'YOUR_APPS_SCRIPT_URL_HERE'){
     try {
-      const resp = await fetch(SHEETS_ENDPOINT);
+      const resp = await fetch(SHEETS_ENDPOINT, { method:'GET', redirect:'follow', mode:'cors' });
       const data = await resp.json();
       P = {};
       Object.keys(data).forEach(id => {
