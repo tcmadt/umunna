@@ -389,10 +389,30 @@ let _searchIds = [];
 // Your Apps Script Web App URL (handles both GET for data and POST for suggestions)
 const SHEETS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec';
 
+let _dataReady = false;
+
 function enterTree(){
   document.getElementById('view-welcome').style.display='none';
   document.getElementById('view-tree').style.display='block';
-  setTimeout(()=>scrollToNode(0), 150);
+  if(_dataReady){
+    renderTree();
+    renderMembers();
+    renderDiscover();
+    setTimeout(()=>scrollToNode(findYouNode()), 200);
+  } else {
+    // Data still loading — show spinner and wait
+    showLoader(true);
+    const wait = setInterval(()=>{
+      if(_dataReady){
+        clearInterval(wait);
+        showLoader(false);
+        renderTree();
+        renderMembers();
+        renderDiscover();
+        setTimeout(()=>scrollToNode(findYouNode()), 200);
+      }
+    }, 200);
+  }
 }
 
 // ── LAYOUT ──
@@ -421,10 +441,15 @@ const RC={you:'#E8BF60',parent:'#5A9AE0',grandparent:'#9A72D8','great-grandparen
 const RL={you:'You',parent:'Parent',grandparent:'Grandparent','great-grandparent':'Great-grandparent',ancestor:'Ancestor','aunt-uncle':'Aunt / Uncle',cousin:'Cousin',distant:'In-law / Extended'};
 
 // ── GENDER FROM TITLE ──
-function gender(p){ return p.title==='Mrs.'||p.title==='Miss'?'f':'m'; }
+function gender(p){ return p.g==='f' ? 'f' : 'm'; }
 function avatar(p){ return gender(p)==='f'?'👩🏾':'👨🏾'; }
-function displayName(p){ return p.title?p.title+' '+p.name:p.name; }
-function shortName(p){ const w=p.name.split(' '); return w[0]+(w.length>1?' '+w.slice(1).join(' ').slice(0,12)+(w.slice(1).join(' ').length>12?'…':''):''); }
+function displayName(p){ return p.name; }
+// Show nickname on the tree node if available, otherwise first name
+function shortName(p){
+  if(p.nickname && p.nickname.trim()) return p.nickname.trim();
+  const w=p.name.split(' ');
+  return w[0]+(w.length>1?' '+w.slice(1).join(' ').slice(0,12)+(w.slice(1).join(' ').length>12?'…':''):'');
+}
 
 // ═══════════════════════════════════════════
 //  STORAGE — persist suggestions + edits
@@ -556,6 +581,11 @@ function openNode(id){
   document.getElementById('p-nick').textContent=p.nicks&&p.nicks.length?'"'+p.nicks.join(', ')+'"':'';
   document.getElementById('p-rel').textContent=RL[p.rel]||'Extended family';
   let body='';
+  const nicks=p.nicks&&p.nicks.length?p.nicks:[];
+  if(nicks.length) body+=`<div class="panel-row"><span class="panel-label">Known as</span><span class="panel-val" style="color:var(--gold);font-style:italic">${nicks.join(', ')}</span></div>`;
+  if(p.birthYear||p.deathYear) body+=`<div class="panel-row"><span class="panel-label">Years</span><span class="panel-val">${p.birthYear?'b. '+p.birthYear:''} ${p.deathYear?'· d. '+p.deathYear:''}</span></div>`;
+  if(p.placeOfBirth||p.birthPlace) body+=`<div class="panel-row"><span class="panel-label">Born in</span><span class="panel-val">${p.placeOfBirth||p.birthPlace}</span></div>`;
+  if(p.currentLocation||p.currentLoc) body+=`<div class="panel-row"><span class="panel-label">Lives in</span><span class="panel-val">${p.currentLocation||p.currentLoc}</span></div>`;
   if(p.notes) body+=`<div class="panel-row"><span class="panel-label">Notes</span><span class="panel-val">${p.notes}</span></div>`;
   const parents=p.pIds.map(pid=>P[pid]||EXTRA_MEMBERS[pid]).filter(Boolean);
   if(parents.length){
@@ -952,42 +982,40 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); cons
 async function init(){
   await loadStorage();
 
-  // Show loading state while fetching from Sheets
   if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'YOUR_APPS_SCRIPT_URL_HERE'){
-    showLoader(true);
     try {
       const resp = await fetch(SHEETS_ENDPOINT);
       const data = await resp.json();
-      // Merge fetched data into P, preserving any local EXTRA_MEMBERS
       P = {};
       Object.keys(data).forEach(id => {
         const person = data[id];
-        // Ensure arrays are proper arrays (JSON parsing can sometimes stringify them)
         P[id] = {
           ...person,
-          pIds: Array.isArray(person.pIds) ? person.pIds : [],
-          sIds: Array.isArray(person.sIds) ? person.sIds : [],
+          pIds:  Array.isArray(person.pIds)  ? person.pIds  : [],
+          sIds:  Array.isArray(person.sIds)  ? person.sIds  : [],
           nicks: Array.isArray(person.nicks) ? person.nicks : [],
         };
       });
-      showLoader(false);
-      renderTree();
-      renderMembers();
-      renderDiscover();
-      setTimeout(()=>scrollToNode(findYouNode()), 200);
+      _dataReady = true;
+      // If the user already clicked Enter before data arrived, render now
+      if(document.getElementById('view-tree').style.display === 'block'){
+        showLoader(false);
+        renderTree();
+        renderMembers();
+        renderDiscover();
+        setTimeout(()=>scrollToNode(findYouNode()), 200);
+      }
     } catch(err) {
       showLoader(false);
-      showToast('Could not load family data. Check your endpoint URL.');
+      showToast('Could not load family data — check your endpoint URL.');
       console.error('Fetch error:', err);
     }
   } else {
-    // No endpoint set — show a clear message
     showToast('⚠ Set SHEETS_ENDPOINT in the HTML to load family data');
   }
 }
 
 function findYouNode(){
-  // Find the node with rel='you', fall back to first key
   const youId = Object.keys(P).find(id => P[id].rel === 'you');
   return youId !== undefined ? parseInt(youId) : parseInt(Object.keys(P)[0] || '0');
 }
@@ -999,7 +1027,7 @@ function showLoader(on){
     el.id = 'tree-loader';
     el.style.cssText = 'position:fixed;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(12,7,2,.92);';
     el.innerHTML = `
-      <div style="font-family:\'Fraunces\',serif;font-size:2rem;color:#E8BF60;margin-bottom:1rem;">Umunna</div>
+      <div style="font-family:'Fraunces',serif;font-size:2rem;color:#E8BF60;margin-bottom:1rem;">Umunna</div>
       <div style="width:40px;height:40px;border:3px solid #3A1E0C;border-top-color:#D08A25;border-radius:50%;animation:spin .8s linear infinite;"></div>
       <div style="margin-top:1rem;font-size:.8rem;color:#8A7060;letter-spacing:.1em;">Loading family tree…</div>
       <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
