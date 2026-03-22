@@ -392,6 +392,33 @@ async function saveExtra(){
 // ═══════════════════════════════════════════
 //  TREE RENDER
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+//  SIBLING ORDERING — sort x-positions by birth year, then ID
+// ═══════════════════════════════════════════
+function computeLayout(){
+  const siblingGroups={};
+  Object.keys(L).forEach(idStr=>{
+    const id=parseInt(idStr);
+    const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds||!p.pIds.length)return;
+    const key=p.pIds.slice().sort((a,b)=>a-b).join(',');
+    if(!siblingGroups[key]) siblingGroups[key]=[];
+    siblingGroups[key].push(id);
+  });
+  Object.values(siblingGroups).forEach(siblings=>{
+    if(siblings.length<2)return;
+    const sorted=siblings.slice().sort((a,b)=>{
+      const pa=P[a]||EXTRA_MEMBERS[a];
+      const pb=P[b]||EXTRA_MEMBERS[b];
+      const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
+      const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
+      if(ya!==yb)return ya-yb;
+      return a-b;
+    });
+    const xs=siblings.map(id=>L[id][0]).sort((a,b)=>a-b);
+    sorted.forEach((id,i)=>{ L[id]=[xs[i],L[id][1]]; });
+  });
+}
+
 function renderTree(){
   const svg=document.getElementById('main-tree');
   const W=3400,H=840;
@@ -937,6 +964,7 @@ async function init(){
       });
       _dataReady = true;
       showLoader(false);
+      computeLayout();
       renderTree();
       setTimeout(()=>scrollToNode(findYouNode()), 200);
     } catch(err) {
