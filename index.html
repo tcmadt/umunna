@@ -979,13 +979,27 @@ document.addEventListener('click', ()=>closeCtx());
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeCtx(); const si=document.getElementById('tree-search'); if(document.activeElement===si){si.value='';searchTree('');} } });
 
 // ── INIT ──
+function loadViaJSONP(url){
+  return new Promise((resolve, reject)=>{
+    const cb = 'umunna_cb_' + Date.now();
+    const script = document.createElement('script');
+    window[cb] = (data)=>{
+      delete window[cb];
+      document.head.removeChild(script);
+      resolve(data);
+    };
+    script.onerror = ()=>{ delete window[cb]; reject(new Error('JSONP failed')); };
+    script.src = url + '?callback=' + cb;
+    document.head.appendChild(script);
+  });
+}
+
 async function init(){
   await loadStorage();
 
   if(SHEETS_ENDPOINT && SHEETS_ENDPOINT !== 'YOUR_APPS_SCRIPT_URL_HERE'){
     try {
-      const resp = await fetch(SHEETS_ENDPOINT, { method:'GET', redirect:'follow', mode:'cors' });
-      const data = await resp.json();
+      const data = await loadViaJSONP(SHEETS_ENDPOINT);
       P = {};
       Object.keys(data).forEach(id => {
         const person = data[id];
@@ -997,7 +1011,6 @@ async function init(){
         };
       });
       _dataReady = true;
-      // If the user already clicked Enter before data arrived, render now
       if(document.getElementById('view-tree').style.display === 'block'){
         showLoader(false);
         renderTree();
@@ -1008,7 +1021,7 @@ async function init(){
     } catch(err) {
       showLoader(false);
       showToast('Could not load family data — check your endpoint URL.');
-      console.error('Fetch error:', err);
+      console.error('JSONP error:', err);
     }
   } else {
     showToast('⚠ Set SHEETS_ENDPOINT in the HTML to load family data');
