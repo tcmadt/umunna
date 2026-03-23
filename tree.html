@@ -394,53 +394,68 @@ async function saveExtra(){
 //  SIBLING ORDERING — sort x-positions by birth year, then ID
 // ═══════════════════════════════════════════
 function computeLayout(){
-  // Build set of IDs that have at least one child in L — these are not leaf nodes
-  const hasChildrenInL=new Set();
-  Object.keys(L).forEach(idStr=>{
-    const id=parseInt(idStr);
-    const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds)return;
-    p.pIds.forEach(pid=>{ if(L[pid]!==undefined) hasChildrenInL.add(pid); });
+  const SPACING=130;
+  const ROW_Y=[70,200,330,460,590,720];
+
+  ROW_Y.forEach(y=>{
+    // Find all sibling groups at this y level
+    const siblingGroups={};
+    Object.keys(L).forEach(idStr=>{
+      const id=parseInt(idStr);
+      if(L[id][1]!==y)return;
+      const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds||!p.pIds.length)return;
+      const key=p.pIds.slice().sort((a,b)=>a-b).join(',');
+      if(!siblingGroups[key]) siblingGroups[key]=[];
+      siblingGroups[key].push(id);
+    });
+
+    Object.entries(siblingGroups).forEach(([key,siblings])=>{
+      if(siblings.length<2)return;
+
+      // Sort by birth year then ID
+      const sorted=siblings.slice().sort((a,b)=>{
+        const pa=P[a]||EXTRA_MEMBERS[a];
+        const pb=P[b]||EXTRA_MEMBERS[b];
+        const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
+        const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
+        if(ya!==yb)return ya-yb;
+        return a-b;
+      });
+
+      // Find parent midpoint
+      const parentIds=key.split(',').map(Number);
+      const parentsInL=parentIds.filter(pid=>L[pid]!==undefined);
+      if(!parentsInL.length)return;
+      const parentMidX=parentsInL.reduce((s,pid)=>s+L[pid][0],0)/parentsInL.length;
+
+      // Compute where sibling slots fall, then center them under the parent midpoint
+      // Each sibling occupies 1 slot; each in-L spouse adds 1 more slot immediately after
+      let slot=0, sibSlotSum=0;
+      sorted.forEach(id=>{
+        sibSlotSum+=slot++;
+        const p=P[id]||EXTRA_MEMBERS[id];
+        (p?.sIds||[]).forEach(sid=>{if(L[sid])slot++;});
+      });
+      const startX=Math.round(parentMidX-(sibSlotSum/sorted.length)*SPACING);
+
+      // Assign new x positions
+      slot=0;
+      sorted.forEach(id=>{
+        L[id]=[startX+slot*SPACING, y]; slot++;
+        const p=P[id]||EXTRA_MEMBERS[id];
+        (p?.sIds||[]).forEach(sid=>{
+          if(L[sid]){L[sid]=[startX+slot*SPACING, y]; slot++;}
+        });
+      });
+    });
   });
 
-  const siblingGroups={};
-  Object.keys(L).forEach(idStr=>{
-    const id=parseInt(idStr);
-    const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds||!p.pIds.length)return;
-    const key=p.pIds.slice().sort((a,b)=>a-b).join(',');
-    if(!siblingGroups[key]) siblingGroups[key]=[];
-    siblingGroups[key].push(id);
-  });
-
-  Object.values(siblingGroups).forEach(siblings=>{
-    if(siblings.length<2)return;
-    // Only sort leaf groups — skip any group where a sibling has children in L,
-    // because moving parents without moving their subtrees breaks alignment
-    if(siblings.some(id=>hasChildrenInL.has(id)))return;
-
-    const sorted=siblings.slice().sort((a,b)=>{
-      const pa=P[a]||EXTRA_MEMBERS[a];
-      const pb=P[b]||EXTRA_MEMBERS[b];
-      const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
-      const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
-      if(ya!==yb)return ya-yb;
-      return a-b;
-    });
-    // Collect all x slots: each sibling + their in-L spouses, sorted ascending
-    const allXs=[];
-    siblings.forEach(id=>{
-      allXs.push(L[id][0]);
-      const p=P[id]||EXTRA_MEMBERS[id];
-      (p?.sIds||[]).forEach(sid=>{if(L[sid])allXs.push(L[sid][0]);});
-    });
-    allXs.sort((a,b)=>a-b);
-    // Assign slots in order: sibling first, then their in-L spouse(s), then next sibling
-    let slot=0;
-    sorted.forEach(id=>{
-      L[id]=[allXs[slot++],L[id][1]];
-      const p=P[id]||EXTRA_MEMBERS[id];
-      (p?.sIds||[]).forEach(sid=>{if(L[sid])L[sid]=[allXs[slot++],L[sid][1]];});
-    });
-  });
+  // If any node drifted off the left edge, shift everything right
+  const minX=Math.min(...Object.values(L).map(p=>p[0]));
+  if(minX<SPACING/2){
+    const shift=Math.ceil(SPACING/2-minX);
+    Object.keys(L).forEach(id=>{L[id]=[L[id][0]+shift, L[id][1]];});
+  }
 }
 
 function renderTree(){
