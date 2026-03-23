@@ -412,8 +412,21 @@ function computeLayout(){
       if(ya!==yb)return ya-yb;
       return a-b;
     });
-    const xs=siblings.map(id=>L[id][0]).sort((a,b)=>a-b);
-    sorted.forEach((id,i)=>{ L[id]=[xs[i],L[id][1]]; });
+    // Collect all x slots: each sibling + their in-L spouses, sorted ascending
+    const allXs=[];
+    siblings.forEach(id=>{
+      allXs.push(L[id][0]);
+      const p=P[id]||EXTRA_MEMBERS[id];
+      (p?.sIds||[]).forEach(sid=>{if(L[sid])allXs.push(L[sid][0]);});
+    });
+    allXs.sort((a,b)=>a-b);
+    // Assign slots in order: sibling first, then their in-L spouse(s), then next sibling
+    let slot=0;
+    sorted.forEach(id=>{
+      L[id]=[allXs[slot++],L[id][1]];
+      const p=P[id]||EXTRA_MEMBERS[id];
+      (p?.sIds||[]).forEach(sid=>{if(L[sid])L[sid]=[allXs[slot++],L[sid][1]];});
+    });
   });
 }
 
