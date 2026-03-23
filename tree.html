@@ -422,7 +422,24 @@ function renderTree(){
   const visNodes=root.descendants().filter(d=>d.id!=='__root__');
   const visLinks=root.links().filter(d=>d.source.id!=='__root__'&&d.target.id!=='__root__');
 
-  // Canvas sizing
+  // Post-process: move married-in spouses (parent===__root__) adjacent to their in-tree partner
+  const idToNode=new Map(visNodes.map(n=>[+n.id,n]));
+  const movedSpouses=new Set();
+  visNodes.forEach(nodeA=>{
+    const p=nodeA.person;if(!p?.sIds)return;
+    p.sIds.forEach(sid=>{
+      const nodeB=idToNode.get(+sid);if(!nodeB)return;
+      const aRoot=nodeA.parent?.id==='__root__';
+      const bRoot=nodeB.parent?.id==='__root__';
+      if(bRoot&&!aRoot&&!movedSpouses.has(+nodeB.id)){
+        nodeB.y=nodeA.y; nodeB.x=nodeA.x+NW+20; movedSpouses.add(+nodeB.id);
+      } else if(aRoot&&!bRoot&&!movedSpouses.has(+nodeA.id)){
+        nodeA.y=nodeB.y; nodeA.x=nodeB.x+NW+20; movedSpouses.add(+nodeA.id);
+      }
+    });
+  });
+
+  // Canvas sizing (after spouse repositioning)
   const xs=visNodes.map(d=>d.x),ys=visNodes.map(d=>d.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs);
   const totalW=Math.max(W,maxX-minX+NW+200);
@@ -498,8 +515,9 @@ function renderTree(){
       const key=[Math.min(+nodeA.id,+sid),Math.max(+nodeA.id,+sid)].join(',');
       if(drawnCouples.has(key))return;drawnCouples.add(key);
       const nodeB=visNodes.find(n=>+n.id===+sid);if(!nodeB)return;
-      const x1=Math.min(nodeA.x,nodeB.x)+NW/2,x2=Math.max(nodeA.x,nodeB.x)-NW/2,y=nodeA.y;
-      if(x2>x1&&x2-x1<260){
+      const x1=Math.min(nodeA.x,nodeB.x)+NW/2,x2=Math.max(nodeA.x,nodeB.x)-NW/2;
+      const y=(nodeA.y+nodeB.y)/2;
+      if(x2>x1){
         spouseG.append('line').attr('x1',x1).attr('y1',y).attr('x2',x2).attr('y2',y)
           .attr('stroke','#4A2810').attr('stroke-width',1.5).attr('stroke-dasharray','3,2');
         spouseG.append('circle').attr('cx',(x1+x2)/2).attr('cy',y).attr('r',2.5).attr('fill','#4A2810');
