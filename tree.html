@@ -439,6 +439,17 @@ function renderTree(){
     });
   });
 
+  // Resolve overlaps row-by-row after spouse repositioning
+  const MIN_GAP=NW+20;
+  const byRow=new Map();
+  visNodes.forEach(n=>{const row=Math.round(n.y);if(!byRow.has(row))byRow.set(row,[]);byRow.get(row).push(n);});
+  byRow.forEach(nodes=>{
+    nodes.sort((a,b)=>a.x-b.x);
+    for(let i=1;i<nodes.length;i++){
+      if(nodes[i].x<nodes[i-1].x+MIN_GAP) nodes[i].x=nodes[i-1].x+MIN_GAP;
+    }
+  });
+
   // Canvas sizing (after spouse repositioning)
   const xs=visNodes.map(d=>d.x),ys=visNodes.map(d=>d.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs);
