@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Umunna — Madu · Offorbuike Family Tree</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;1,9..144,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0C0702;--bg2:#160D05;--card:#1C0E06;--card2:#211008;--border:#3A1E0C;--border2:#4A280E;
+  --gold:#D08A25;--amber:#E8BF60;--terra:#B85E28;--cream:#F0E8D8;
+  --muted:#8A7060;--green:#52A86E;--blue:#4E8FCC;--purple:#8A52C8;--teal:#4AB8B0;
+  --red:#C05050;--historian:#D08A25;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--cream);min-height:100vh;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 60% 50% at 15% 10%,rgba(208,138,37,.06) 0%,transparent 65%),radial-gradient(ellipse 40% 60% at 85% 90%,rgba(184,94,40,.06) 0%,transparent 65%);pointer-events:none;z-index:0;}
+body::after{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none'%3E%3Cg stroke='%23D08A25' stroke-width='0.3' opacity='0.04'%3E%3Ccircle cx='30' cy='30' r='12'/%3E%3Ccircle cx='30' cy='30' r='6'/%3E%3Cline x1='30' y1='0' x2='30' y2='60'/%3E%3Cline x1='0' y1='30' x2='60' y2='30'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");pointer-events:none;z-index:0;}
+
+/* ── WELCOME ── */
+#view-welcome{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:3rem 1.5rem;text-align:center;flex-direction:column;position:relative;z-index:1;}
+.logo{font-family:'Fraunces',serif;font-size:4rem;font-weight:700;color:var(--amber);letter-spacing:-.03em;line-height:1;}
+.tagline{font-size:.8rem;letter-spacing:.35em;text-transform:uppercase;color:var(--muted);margin:.5rem 0 3rem;}
+.hero-h{font-family:'Fraunces',serif;font-size:clamp(2rem,5vw,3.8rem);line-height:1.1;max-width:680px;margin-bottom:1.5rem;}
+.hero-h em{color:var(--gold);font-style:italic;}
+.hero-p{font-size:1.05rem;color:var(--muted);line-height:1.8;max-width:520px;margin:0 auto 2.5rem;}
+.btn-enter{display:inline-flex;align-items:center;gap:.5rem;padding:.85rem 2.2rem;border-radius:4px;font-family:'Outfit',sans-serif;font-size:.92rem;font-weight:700;cursor:pointer;border:none;background:var(--gold);color:#0C0702;letter-spacing:.06em;text-transform:uppercase;transition:all .2s;}
+.btn-enter:hover{background:var(--amber);transform:translateY(-2px);box-shadow:0 8px 24px rgba(208,138,37,.38);}
+.badge-float{display:flex;gap:.75rem;flex-wrap:wrap;justify-content:center;margin-top:2rem;}
+.badge{background:var(--card);border:1px solid var(--border);border-radius:100px;padding:.3rem .9rem;font-size:.78rem;color:var(--muted);}
+.badge span{color:var(--amber);margin-right:.3rem;}
+.how-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:3rem;max-width:720px;}
+.how-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1.35rem;text-align:left;}
+.how-num{font-family:'Fraunces',serif;font-size:2rem;color:var(--terra);line-height:1;margin-bottom:.6rem;}
+.how-t{font-weight:600;font-size:.9rem;margin-bottom:.35rem;}
+.how-p{font-size:.8rem;color:var(--muted);line-height:1.6;}
+.stats{display:flex;gap:3rem;margin-top:4rem;padding-top:2rem;border-top:1px solid var(--border);}
+.stat-n{font-family:'Fraunces',serif;font-size:2.2rem;color:var(--gold);}
+.stat-l{font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);}
+@media(max-width:640px){.how-cards{grid-template-columns:1fr;}.stats{gap:1.5rem;}}
+</style>
+</head>
+<body>
+
+<!-- ══════════ WELCOME ══════════ -->
+<div id="view-welcome">
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:3rem 1.5rem;text-align:center;position:relative;z-index:1;">
+  <div class="logo">Umunna</div>
+  <div class="tagline">Global Family Network</div>
+  <h1 class="hero-h">Map your roots.<br><em>Find your people</em>,<br>anywhere on Earth.</h1>
+  <p class="hero-p">Build your family tree from memory. As others do the same, Umunna quietly detects overlaps — revealing relatives you didn't know existed, from Lagos to London to Atlanta.</p>
+  <button class="btn-enter" onclick="window.location='https://tcmadt.github.io/umunna/tree/'">Enter →</button>
+  <div class="badge-float">
+    <div class="badge"><span style="vertical-align:middle;display:inline-block;margin-right:.35rem"><svg width="14" height="14" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><ellipse cx="7.5" cy="11.5" rx="6.5" ry="1.8" fill="#8B1515"/><path d="M2 11.5 Q3 6.5 7.5 5.5 Q12 6.5 13 11.5Z" fill="#C0392B"/><path d="M7.5 5.5 C8 3.5 9.5 1.5 8.5 0 C7 2 7 4 7.5 5.5Z" fill="#D4A017"/><path d="M7.5 5.5 C8.5 3 10.5 1.5 10 0 C8.2 2 7.8 4 7.5 5.5Z" fill="#C49010" opacity="0.85"/></svg></span>Diaspora-first</div>
+    <div class="badge"><span>🌍</span> No DNA required</div>
+    <div class="badge"><span>🤝</span> Community-owned</div>
+  </div>
+  <div class="how-cards">
+    <div class="how-card"><div class="how-num">01</div><div class="how-t">Build from memory</div><div class="how-p">Add family members you know — names, birthplaces, nicknames. Partial info is fine.</div></div>
+    <div class="how-card"><div class="how-num">02</div><div class="how-t">Umunna finds matches</div><div class="how-p">When another user's tree shares relatives, we surface the overlap confidentially.</div></div>
+    <div class="how-card"><div class="how-num">03</div><div class="how-t">Trees merge globally</div><div class="how-p">Connected trees grow into a map of the whole world — revealing hidden family networks.</div></div>
+  </div>
+  <div class="stats">
+    <div><div class="stat-n">∞</div><div class="stat-l">Connections possible</div></div>
+    <div><div class="stat-n">Free</div><div class="stat-l">No subscription</div></div>
+    <div><div class="stat-n">0</div><div class="stat-l">DNA tests needed</div></div>
+  </div>
+</div>
+</div>
+
+</body>
+</html>
