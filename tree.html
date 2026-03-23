@@ -431,7 +431,9 @@ function computeLayout(){
 
   // PASS 1 — top-down: position each generation's family groups centered under
   // their parents, then push groups right to eliminate overlaps.
-  ROW_Y.forEach(y=>{
+  // Called twice: once before pass 2 (initial placement) and once after (re-sort
+  // children based on updated parent positions so no edges cross).
+  function pass1(){ROW_Y.forEach(y=>{
     const keysHere=Object.keys(childrenOf).filter(key=>
       childrenOf[key].some(cid=>L[cid]&&L[cid][1]===y)
     );
@@ -471,7 +473,8 @@ function computeLayout(){
     groups.forEach(({nodes,startX})=>{
       nodes.forEach((id,i)=>{L[id]=[startX+i*SPACING,y];});
     });
-  });
+  });} // end pass1
+  pass1();
 
   // PASS 2 — bottom-up: re-center each parent couple over their children's actual
   // x range (since pass 1 may have pushed children away from the ideal midpoint),
@@ -504,6 +507,10 @@ function computeLayout(){
     fixOverlaps(y);
   });
 
+  // Re-run pass 1 so children are re-sorted to match updated parent positions,
+  // eliminating any crossing edges introduced by the bottom-up re-centering.
+  pass1();
+
   // Shift everything right if any node drifted off the left edge
   const minX=Math.min(...Object.values(L).map(p=>p[0]));
   if(minX<SPACING/2){
@@ -514,7 +521,8 @@ function computeLayout(){
 
 function renderTree(){
   const svg=document.getElementById('main-tree');
-  const W=3400,H=840;
+  const allXs=Object.values(L).map(p=>p[0]);
+  const W=Math.ceil(Math.max(...allXs)+NW/2+130),H=840;
   svg.setAttribute('width',W);svg.setAttribute('height',H);svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   let o=`<defs><filter id="gm"><feGaussianBlur stdDeviation="9" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/></filter></defs>`;
   [[70,'3× great-grandparents'],[200,'2× great-grandparents'],[330,'great-grandparents'],[460,'grandparents'],[590,'parents · aunts & uncles · cousins'],[720,'you']].forEach(([y,l])=>{
