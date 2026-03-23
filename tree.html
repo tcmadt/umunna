@@ -394,6 +394,14 @@ async function saveExtra(){
 //  SIBLING ORDERING — sort x-positions by birth year, then ID
 // ═══════════════════════════════════════════
 function computeLayout(){
+  // Build set of IDs that have at least one child in L — these are not leaf nodes
+  const hasChildrenInL=new Set();
+  Object.keys(L).forEach(idStr=>{
+    const id=parseInt(idStr);
+    const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds)return;
+    p.pIds.forEach(pid=>{ if(L[pid]!==undefined) hasChildrenInL.add(pid); });
+  });
+
   const siblingGroups={};
   Object.keys(L).forEach(idStr=>{
     const id=parseInt(idStr);
@@ -402,8 +410,13 @@ function computeLayout(){
     if(!siblingGroups[key]) siblingGroups[key]=[];
     siblingGroups[key].push(id);
   });
+
   Object.values(siblingGroups).forEach(siblings=>{
     if(siblings.length<2)return;
+    // Only sort leaf groups — skip any group where a sibling has children in L,
+    // because moving parents without moving their subtrees breaks alignment
+    if(siblings.some(id=>hasChildrenInL.has(id)))return;
+
     const sorted=siblings.slice().sort((a,b)=>{
       const pa=P[a]||EXTRA_MEMBERS[a];
       const pb=P[b]||EXTRA_MEMBERS[b];
