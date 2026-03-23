@@ -419,15 +419,24 @@ function computeLayout(){
     });
   });
 
-  // Top-down: for each generation, sort groups by parent midpoint, center under parents,
-  // then push groups right to eliminate any overlaps between adjacent groups.
+  // Helper: spread nodes at a given y level so no two are closer than SPACING
+  function fixOverlaps(y){
+    const nodes=Object.keys(L).map(Number).filter(id=>L[id][1]===y);
+    nodes.sort((a,b)=>L[a][0]-L[b][0]);
+    for(let i=1;i<nodes.length;i++){
+      if(L[nodes[i]][0]<L[nodes[i-1]][0]+SPACING)
+        L[nodes[i]]=[L[nodes[i-1]][0]+SPACING,y];
+    }
+  }
+
+  // PASS 1 — top-down: position each generation's family groups centered under
+  // their parents, then push groups right to eliminate overlaps.
   ROW_Y.forEach(y=>{
     const keysHere=Object.keys(childrenOf).filter(key=>
       childrenOf[key].some(cid=>L[cid]&&L[cid][1]===y)
     );
     if(!keysHere.length)return;
 
-    // Sort groups left→right by their parent midpoint x
     keysHere.sort((a,b)=>{
       const mx=k=>{
         const pids=k.split(',').map(Number).filter(pid=>L[pid]!==undefined);
@@ -436,15 +445,13 @@ function computeLayout(){
       return mx(a)-mx(b);
     });
 
-    // Build ordered node list for each group (sibling immediately followed by in-L spouse).
-    // One global placed-set per generation ensures each node appears in exactly one group.
     const placedAtY=new Set();
     const groups=keysHere.map(key=>{
       const pids=key.split(',').map(Number).filter(pid=>L[pid]!==undefined);
       const nodes=[];
       (childrenOf[key]||[]).forEach(cid=>{
         if(!L[cid]||L[cid][1]!==y||placedAtY.has(cid))return;
-        placedAtY.add(cid); nodes.push(cid);
+        placedAtY.add(cid);nodes.push(cid);
         (P[cid]||EXTRA_MEMBERS[cid])?.sIds?.forEach(sid=>{
           if(L[sid]&&L[sid][1]===y&&!placedAtY.has(sid)){placedAtY.add(sid);nodes.push(sid);}
         });
@@ -455,17 +462,46 @@ function computeLayout(){
       return{nodes,startX:Math.round(parentMidX-width/2),width};
     }).filter(Boolean);
 
-    // Fix overlaps: scan left→right, push any group that would overlap its left neighbour
     for(let i=1;i<groups.length;i++){
       const prev=groups[i-1];
       const minStart=prev.startX+prev.width+SPACING;
       if(groups[i].startX<minStart)groups[i].startX=minStart;
     }
 
-    // Assign x positions
     groups.forEach(({nodes,startX})=>{
       nodes.forEach((id,i)=>{L[id]=[startX+i*SPACING,y];});
     });
+  });
+
+  // PASS 2 — bottom-up: re-center each parent couple over their children's actual
+  // x range (since pass 1 may have pushed children away from the ideal midpoint),
+  // then fix any resulting overlaps at the parent level.
+  const revY=[...ROW_Y].reverse(); // [720,590,460,330,200,70]
+  revY.forEach((y,yi)=>{
+    const childY=revY[yi-1]; // the generation directly below y (higher y-value = lower on screen)
+    if(childY===undefined)return; // y=720 is the bottom; nothing below
+
+    Object.keys(childrenOf)
+      .filter(key=>childrenOf[key].some(cid=>L[cid]&&L[cid][1]===childY))
+      .forEach(key=>{
+        const children=childrenOf[key].filter(cid=>L[cid]&&L[cid][1]===childY);
+        if(!children.length)return;
+
+        const xs=children.map(cid=>L[cid][0]);
+        const childMidX=(Math.min(...xs)+Math.max(...xs))/2;
+
+        const pids=key.split(',').map(Number).filter(pid=>L[pid]&&L[pid][1]===y);
+        if(!pids.length)return;
+
+        const currentMidX=pids.reduce((s,p)=>s+L[p][0],0)/pids.length;
+        const shift=Math.round(childMidX-currentMidX);
+        if(Math.abs(shift)<2)return;
+
+        // Move the couple as a rigid unit
+        pids.forEach(pid=>{L[pid]=[L[pid][0]+shift,y];});
+      });
+
+    fixOverlaps(y);
   });
 
   // Shift everything right if any node drifted off the left edge
