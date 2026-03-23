@@ -397,64 +397,82 @@ function computeLayout(){
   const SPACING=130;
   const ROW_Y=[70,200,330,460,590,720];
 
-  ROW_Y.forEach(y=>{
-    // Find all sibling groups at this y level
-    const siblingGroups={};
-    Object.keys(L).forEach(idStr=>{
-      const id=parseInt(idStr);
-      if(L[id][1]!==y)return;
-      const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds||!p.pIds.length)return;
-      const key=p.pIds.slice().sort((a,b)=>a-b).join(',');
-      if(!siblingGroups[key]) siblingGroups[key]=[];
-      siblingGroups[key].push(id);
-    });
+  // Build childrenOf: parentKey -> sorted child IDs (only nodes in L)
+  const childrenOf={};
+  Object.keys(L).forEach(idStr=>{
+    const id=parseInt(idStr);
+    const p=P[id]||EXTRA_MEMBERS[id]; if(!p?.pIds?.length)return;
+    const parentsInL=p.pIds.filter(pid=>L[pid]!==undefined);
+    if(!parentsInL.length)return;
+    const key=parentsInL.slice().sort((a,b)=>a-b).join(',');
+    if(!childrenOf[key])childrenOf[key]=[];
+    if(!childrenOf[key].includes(id))childrenOf[key].push(id);
+  });
 
-    Object.entries(siblingGroups).forEach(([key,siblings])=>{
-      if(siblings.length<2)return;
-
-      // Sort by birth year then ID
-      const sorted=siblings.slice().sort((a,b)=>{
-        const pa=P[a]||EXTRA_MEMBERS[a];
-        const pb=P[b]||EXTRA_MEMBERS[b];
-        const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
-        const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
-        if(ya!==yb)return ya-yb;
-        return a-b;
-      });
-
-      // Find parent midpoint
-      const parentIds=key.split(',').map(Number);
-      const parentsInL=parentIds.filter(pid=>L[pid]!==undefined);
-      if(!parentsInL.length)return;
-      const parentMidX=parentsInL.reduce((s,pid)=>s+L[pid][0],0)/parentsInL.length;
-
-      // Compute where sibling slots fall, then center them under the parent midpoint
-      // Each sibling occupies 1 slot; each in-L spouse adds 1 more slot immediately after
-      let slot=0, sibSlotSum=0;
-      sorted.forEach(id=>{
-        sibSlotSum+=slot++;
-        const p=P[id]||EXTRA_MEMBERS[id];
-        (p?.sIds||[]).forEach(sid=>{if(L[sid])slot++;});
-      });
-      const startX=Math.round(parentMidX-(sibSlotSum/sorted.length)*SPACING);
-
-      // Assign new x positions
-      slot=0;
-      sorted.forEach(id=>{
-        L[id]=[startX+slot*SPACING, y]; slot++;
-        const p=P[id]||EXTRA_MEMBERS[id];
-        (p?.sIds||[]).forEach(sid=>{
-          if(L[sid]){L[sid]=[startX+slot*SPACING, y]; slot++;}
-        });
-      });
+  // Sort children within each group by birth year then ID
+  Object.keys(childrenOf).forEach(k=>{
+    childrenOf[k]=childrenOf[k].slice().sort((a,b)=>{
+      const pa=P[a]||EXTRA_MEMBERS[a],pb=P[b]||EXTRA_MEMBERS[b];
+      const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
+      const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
+      return ya!==yb?ya-yb:a-b;
     });
   });
 
-  // If any node drifted off the left edge, shift everything right
+  // Top-down: for each generation, sort groups by parent midpoint, center under parents,
+  // then push groups right to eliminate any overlaps between adjacent groups.
+  ROW_Y.forEach(y=>{
+    const keysHere=Object.keys(childrenOf).filter(key=>
+      childrenOf[key].some(cid=>L[cid]&&L[cid][1]===y)
+    );
+    if(!keysHere.length)return;
+
+    // Sort groups left→right by their parent midpoint x
+    keysHere.sort((a,b)=>{
+      const mx=k=>{
+        const pids=k.split(',').map(Number).filter(pid=>L[pid]!==undefined);
+        return pids.length?pids.reduce((s,p)=>s+L[p][0],0)/pids.length:0;
+      };
+      return mx(a)-mx(b);
+    });
+
+    // Build ordered node list for each group (sibling immediately followed by in-L spouse).
+    // One global placed-set per generation ensures each node appears in exactly one group.
+    const placedAtY=new Set();
+    const groups=keysHere.map(key=>{
+      const pids=key.split(',').map(Number).filter(pid=>L[pid]!==undefined);
+      const nodes=[];
+      (childrenOf[key]||[]).forEach(cid=>{
+        if(!L[cid]||L[cid][1]!==y||placedAtY.has(cid))return;
+        placedAtY.add(cid); nodes.push(cid);
+        (P[cid]||EXTRA_MEMBERS[cid])?.sIds?.forEach(sid=>{
+          if(L[sid]&&L[sid][1]===y&&!placedAtY.has(sid)){placedAtY.add(sid);nodes.push(sid);}
+        });
+      });
+      if(!nodes.length)return null;
+      const parentMidX=pids.length?pids.reduce((s,p)=>s+L[p][0],0)/pids.length:L[nodes[0]][0];
+      const width=(nodes.length-1)*SPACING;
+      return{nodes,startX:Math.round(parentMidX-width/2),width};
+    }).filter(Boolean);
+
+    // Fix overlaps: scan left→right, push any group that would overlap its left neighbour
+    for(let i=1;i<groups.length;i++){
+      const prev=groups[i-1];
+      const minStart=prev.startX+prev.width+SPACING;
+      if(groups[i].startX<minStart)groups[i].startX=minStart;
+    }
+
+    // Assign x positions
+    groups.forEach(({nodes,startX})=>{
+      nodes.forEach((id,i)=>{L[id]=[startX+i*SPACING,y];});
+    });
+  });
+
+  // Shift everything right if any node drifted off the left edge
   const minX=Math.min(...Object.values(L).map(p=>p[0]));
   if(minX<SPACING/2){
     const shift=Math.ceil(SPACING/2-minX);
-    Object.keys(L).forEach(id=>{L[id]=[L[id][0]+shift, L[id][1]];});
+    Object.keys(L).forEach(id=>{L[id]=[L[id][0]+shift,L[id][1]];});
   }
 }
 
