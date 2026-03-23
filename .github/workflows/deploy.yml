@@ -1,10 +1,8 @@
-name: Deploy Tree App
+name: Deploy
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'tree-app/**'
 
 permissions:
   contents: write
@@ -29,10 +27,18 @@ jobs:
         run: npm run build
         working-directory: tree-app
 
+      # Assemble deploy folder:
+      #   /           → landing page
+      #   /tree/      → React tree app
+      - name: Assemble deploy folder
+        run: |
+          mkdir -p deploy/tree
+          cp index.html deploy/index.html
+          cp -r tree-app/dist/. deploy/tree/
+
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: tree-app/dist
-          destination_dir: tree-app/dist
-          keep_files: true
+          publish_dir: deploy
+          keep_files: false
