@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Umunna — Madu · Offorbuike Family Tree</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;1,9..144,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <style>
 :root{
   --bg:#0C0702;--bg2:#160D05;--card:#1C0E06;--card2:#211008;--border:#3A1E0C;--border2:#4A280E;
@@ -37,7 +38,7 @@ body::after{content:'';position:fixed;inset:0;background-image:url("data:image/s
 .h-search-count{font-size:.68rem;color:var(--muted);margin-left:.4rem;white-space:nowrap;}
 
 /* ── TREE CANVAS ── */
-.tree-canvas{overflow:auto;cursor:grab;height:calc(100vh - 50px);position:relative;z-index:1;}
+.tree-canvas{overflow:hidden;cursor:grab;height:calc(100vh - 50px);position:relative;z-index:1;}
 .tree-canvas:active{cursor:grabbing;}
 .tree-canvas svg{display:block;}
 
@@ -338,21 +339,12 @@ let _dataReady = false;
 
 // ── LAYOUT ──
 const NW=110, NH=46;
-const L={
-  6:[100,70],1:[1950,70],2:[2080,70],
-  5:[100,200],3:[1840,200],7:[1970,200],4:[2170,200],
-  8:[780,330],9:[910,330],10:[2300,330],11:[2430,330],12:[2900,330],13:[3030,330],
-  16:[390,460],17:[520,460],14:[1260,460],15:[1390,460],
-  18:[1950,460],20:[2100,460],22:[2260,460],23:[2390,460],
-  24:[2510,460],25:[2620,460],27:[2760,460],
-  40:[80,590],42:[220,590],44:[360,590],46:[500,590],48:[640,590],
-  30:[790,590],32:[910,590],33:[1030,590],28:[1160,590],29:[1290,590],
-  35:[1415,590],36:[1535,590],39:[1660,590],
-  49:[1870,590],51:[1990,590],53:[2110,590],55:[2230,590],57:[2350,590],58:[2460,590],59:[2570,590],
-  61:[1095,720],0:[1225,720],62:[1355,720],63:[1485,720],
-};
 const RC={you:'#E8BF60',parent:'#5A9AE0',grandparent:'#9A72D8','great-grandparent':'#C87840',ancestor:'#A08060','aunt-uncle':'#4AB8B0',cousin:'#52A86E',distant:'#666'};
 const RL={you:'You',parent:'Parent',grandparent:'Grandparent','great-grandparent':'Great-grandparent',ancestor:'Ancestor','aunt-uncle':'Aunt / Uncle',cousin:'Cousin',distant:'In-law / Extended'};
+
+// ── D3 STATE ──
+const _collapsed=new Set();
+let _d3zoom=null,_d3g=null,_currentTransform=null,_nodeXY={};
 
 // ── GENDER FROM TITLE ──
 function gender(p){ return p.g==='f' ? 'f' : 'm'; }
@@ -388,233 +380,206 @@ async function saveExtra(){
 }
 
 // ═══════════════════════════════════════════
-//  TREE RENDER
+//  TREE RENDER (D3 v7)
 // ═══════════════════════════════════════════
-// ═══════════════════════════════════════════
-//  SIBLING ORDERING — sort x-positions by birth year, then ID
-// ═══════════════════════════════════════════
-function computeLayout(){
-  const SPACING=130;
-  const ROW_Y=[70,200,330,460,590,720];
-
-  // Build childrenOf: parentKey -> sorted child IDs (only nodes in L)
-  const childrenOf={};
-  Object.keys(L).forEach(idStr=>{
-    const id=parseInt(idStr);
-    const p=P[id]||EXTRA_MEMBERS[id]; if(!p?.pIds?.length)return;
-    const parentsInL=p.pIds.filter(pid=>L[pid]!==undefined);
-    if(!parentsInL.length)return;
-    const key=parentsInL.slice().sort((a,b)=>a-b).join(',');
-    if(!childrenOf[key])childrenOf[key]=[];
-    if(!childrenOf[key].includes(id))childrenOf[key].push(id);
-  });
-
-  // Sort children within each group by birth year then ID
-  Object.keys(childrenOf).forEach(k=>{
-    childrenOf[k]=childrenOf[k].slice().sort((a,b)=>{
-      const pa=P[a]||EXTRA_MEMBERS[a],pb=P[b]||EXTRA_MEMBERS[b];
-      const ya=pa?.birthYear?parseInt(pa.birthYear):Infinity;
-      const yb=pb?.birthYear?parseInt(pb.birthYear):Infinity;
-      return ya!==yb?ya-yb:a-b;
-    });
-  });
-
-  // Helper: spread nodes at a given y level so no two are closer than SPACING
-  function fixOverlaps(y){
-    const nodes=Object.keys(L).map(Number).filter(id=>L[id][1]===y);
-    nodes.sort((a,b)=>L[a][0]-L[b][0]);
-    for(let i=1;i<nodes.length;i++){
-      if(L[nodes[i]][0]<L[nodes[i-1]][0]+SPACING)
-        L[nodes[i]]=[L[nodes[i-1]][0]+SPACING,y];
-    }
-  }
-
-  // PASS 1 — top-down: position each generation's family groups centered under
-  // their parents, then push groups right to eliminate overlaps.
-  // Called twice: once before pass 2 (initial placement) and once after (re-sort
-  // children based on updated parent positions so no edges cross).
-  function pass1(){ROW_Y.forEach(y=>{
-    const keysHere=Object.keys(childrenOf).filter(key=>
-      childrenOf[key].some(cid=>L[cid]&&L[cid][1]===y)
-    );
-    if(!keysHere.length)return;
-
-    keysHere.sort((a,b)=>{
-      const mx=k=>{
-        const pids=k.split(',').map(Number).filter(pid=>L[pid]!==undefined);
-        return pids.length?pids.reduce((s,p)=>s+L[p][0],0)/pids.length:0;
-      };
-      return mx(a)-mx(b);
-    });
-
-    const placedAtY=new Set();
-    const groups=keysHere.map(key=>{
-      const pids=key.split(',').map(Number).filter(pid=>L[pid]!==undefined);
-      const nodes=[];
-      (childrenOf[key]||[]).forEach(cid=>{
-        if(!L[cid]||L[cid][1]!==y||placedAtY.has(cid))return;
-        placedAtY.add(cid);nodes.push(cid);
-        (P[cid]||EXTRA_MEMBERS[cid])?.sIds?.forEach(sid=>{
-          if(L[sid]&&L[sid][1]===y&&!placedAtY.has(sid)){placedAtY.add(sid);nodes.push(sid);}
-        });
-      });
-      if(!nodes.length)return null;
-      const parentMidX=pids.length?pids.reduce((s,p)=>s+L[p][0],0)/pids.length:L[nodes[0]][0];
-      const width=(nodes.length-1)*SPACING;
-      return{nodes,startX:Math.round(parentMidX-width/2),width};
-    }).filter(Boolean);
-
-    for(let i=1;i<groups.length;i++){
-      const prev=groups[i-1];
-      const minStart=prev.startX+prev.width+SPACING;
-      if(groups[i].startX<minStart)groups[i].startX=minStart;
-    }
-
-    groups.forEach(({nodes,startX})=>{
-      nodes.forEach((id,i)=>{L[id]=[startX+i*SPACING,y];});
-    });
-  });} // end pass1
-  pass1();
-
-  // PASS 2 — bottom-up: re-center each parent couple over their children's actual
-  // x range (since pass 1 may have pushed children away from the ideal midpoint),
-  // then fix any resulting overlaps at the parent level.
-  const revY=[...ROW_Y].reverse(); // [720,590,460,330,200,70]
-  revY.forEach((y,yi)=>{
-    const childY=revY[yi-1]; // the generation directly below y (higher y-value = lower on screen)
-    if(childY===undefined)return; // y=720 is the bottom; nothing below
-
-    Object.keys(childrenOf)
-      .filter(key=>childrenOf[key].some(cid=>L[cid]&&L[cid][1]===childY))
-      .forEach(key=>{
-        const children=childrenOf[key].filter(cid=>L[cid]&&L[cid][1]===childY);
-        if(!children.length)return;
-
-        const xs=children.map(cid=>L[cid][0]);
-        const childMidX=(Math.min(...xs)+Math.max(...xs))/2;
-
-        const pids=key.split(',').map(Number).filter(pid=>L[pid]&&L[pid][1]===y);
-        if(!pids.length)return;
-
-        const currentMidX=pids.reduce((s,p)=>s+L[p][0],0)/pids.length;
-        const shift=Math.round(childMidX-currentMidX);
-        if(Math.abs(shift)<2)return;
-
-        // Move the couple as a rigid unit
-        pids.forEach(pid=>{L[pid]=[L[pid][0]+shift,y];});
-      });
-
-    fixOverlaps(y);
-  });
-
-  // Re-run pass 1 so children are re-sorted to match updated parent positions,
-  // eliminating any crossing edges introduced by the bottom-up re-centering.
-  pass1();
-
-  // Shift everything right if any node drifted off the left edge
-  const minX=Math.min(...Object.values(L).map(p=>p[0]));
-  if(minX<SPACING/2){
-    const shift=Math.ceil(SPACING/2-minX);
-    Object.keys(L).forEach(id=>{L[id]=[L[id][0]+shift,L[id][1]];});
-  }
-}
 
 function renderTree(){
-  const svg=document.getElementById('main-tree');
-  const allXs=Object.values(L).map(p=>p[0]);
-  const W=Math.ceil(Math.max(...allXs)+NW/2+130),H=840;
-  svg.setAttribute('width',W);svg.setAttribute('height',H);svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
-  let o=`<defs><filter id="gm"><feGaussianBlur stdDeviation="9" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/></filter></defs>`;
-  [[70,'3× great-grandparents'],[200,'2× great-grandparents'],[330,'great-grandparents'],[460,'grandparents'],[590,'parents · aunts & uncles · cousins'],[720,'you']].forEach(([y,l])=>{
-    o+=`<text x="8" y="${y+4}" fill="#3A2010" font-size="8" font-family="Outfit,sans-serif">${l}</text>`;
+  const allPeople={...P,...EXTRA_MEMBERS};
+  if(!Object.keys(allPeople).length){renderUnplaced();return;}
+
+  const svgEl=document.getElementById('main-tree');
+  const W=window.innerWidth;
+  const H=Math.round(window.innerHeight*0.8);
+
+  // Build stratify input — pIds[0] is tree parent, fall back to synthetic __root__
+  const idSet=new Set(Object.keys(allPeople).map(Number));
+  const items=[{id:'__root__',parentId:null}];
+  Object.entries(allPeople).forEach(([id,p])=>{
+    const pid=p.pIds&&p.pIds.length>0&&idSet.has(p.pIds[0])?String(p.pIds[0]):'__root__';
+    items.push({id:String(id),parentId:pid});
   });
-  [70,200,330,460,590,720].forEach(y=>{
-    o+=`<line x1="0" y1="${y+NH/2+3}" x2="${W}" y2="${y+NH/2+3}" stroke="#1A0804" stroke-width="1"/>`;
+
+  let root;
+  try{
+    root=d3.stratify().id(d=>d.id).parentId(d=>d.parentId)(items);
+  }catch(e){console.error('D3 stratify error',e);renderUnplaced();return;}
+
+  // Attach person data
+  root.each(node=>{if(node.id!=='__root__')node.person=allPeople[+node.id];});
+
+  // Apply collapse state
+  root.eachBefore(node=>{
+    if(_collapsed.has(node.id)){
+      if(node.children){node._children=node.children;node.children=null;}
+    } else {
+      if(node._children){node.children=node._children;node._children=null;}
+    }
   });
-  // Edges — derived dynamically from pIds in sheet data
-  const edgeMap={};
-  Object.keys(L).forEach(idStr=>{
-    const id=parseInt(idStr);
-    const p=P[id]||EXTRA_MEMBERS[id]; if(!p||!p.pIds||!p.pIds.length)return;
-    const parentsInL=p.pIds.filter(pid=>L[pid]!==undefined);
-    if(!parentsInL.length)return;
-    const key=parentsInL.slice().sort((a,b)=>a-b).join(',');
-    if(!edgeMap[key]) edgeMap[key]={parents:parentsInL,children:[]};
-    edgeMap[key].children.push(id);
-  });
-  Object.values(edgeMap).forEach(({parents,children})=>{
-    const p1=L[parents[0]],p2=parents[1]!=null?L[parents[1]]:null; if(!p1)return;
-    const fx=p2?(p1[0]+p2[0])/2:p1[0],fy=p1[1]+NH/2;
-    const step=p2&&Math.abs(p1[0]-p2[0])>500;
-    children.forEach(cid=>{
-      const cp=L[cid]; if(!cp)return;
-      const tx=cp[0],ty=cp[1]-NH/2,my=(fy+ty)/2;
-      const col=RC[(P[cid]||EXTRA_MEMBERS[cid])?.rel]||'#444';
-      o+=`<path d="M${fx},${fy} C${fx},${my} ${tx},${my} ${tx},${ty}" fill="none" stroke="${col}" stroke-width="1.5" stroke-opacity="${step?.18:.28}" stroke-dasharray="${step?'5,3':''}"/>`;
+
+  // D3 tree layout
+  d3.tree().nodeSize([NW+20,NH+90])(root);
+
+  const visNodes=root.descendants().filter(d=>d.id!=='__root__');
+  const visLinks=root.links().filter(d=>d.source.id!=='__root__'&&d.target.id!=='__root__');
+
+  // Canvas sizing
+  const xs=visNodes.map(d=>d.x),ys=visNodes.map(d=>d.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs);
+  const totalW=Math.max(W,maxX-minX+NW+200);
+  const totalH=Math.max(H,Math.max(...ys)+NH+120);
+  const offsetX=totalW/2-(minX+maxX)/2;
+
+  // Cache node positions (group-space coords) for scrollToNode
+  _nodeXY={};
+  visNodes.forEach(d=>{_nodeXY[+d.id]={x:d.x,y:d.y};});
+
+  // SVG setup
+  const svg=d3.select(svgEl).attr('width',totalW).attr('height',totalH);
+  svg.selectAll('*').remove();
+  const g=svg.append('g').attr('class','tree-root');
+  _d3g=g;
+
+  // Zoom — created once, re-attached each render so _d3g closure is current
+  if(!_d3zoom){
+    _d3zoom=d3.zoom().scaleExtent([0.2,3]).on('zoom',event=>{
+      _currentTransform=event.transform;
+      if(_d3g)_d3g.attr('transform',event.transform);
     });
+  }
+  svg.call(_d3zoom);
+  if(_currentTransform){
+    svg.call(_d3zoom.transform,_currentTransform);
+  } else {
+    svg.call(_d3zoom.transform,d3.zoomIdentity.translate(offsetX,60));
+  }
+
+  // Row lines + labels
+  const yLevels=[...new Set(visNodes.map(d=>Math.round(d.y)))].sort((a,b)=>a-b);
+  const rowNames=['3× great-grandparents','2× great-grandparents','great-grandparents','grandparents','parents · aunts & uncles · cousins','you'];
+  const rowG=g.append('g').attr('class','rows');
+  yLevels.forEach((y,i)=>{
+    rowG.append('line').attr('x1',minX-200).attr('y1',y+NH/2+3)
+      .attr('x2',maxX+200).attr('y2',y+NH/2+3)
+      .attr('stroke','#1A0804').attr('stroke-width',1);
+    rowG.append('text').attr('x',minX-190).attr('y',y+4)
+      .attr('fill','#3A2010').attr('font-size',8).attr('font-family','Outfit,sans-serif')
+      .text(rowNames[i]||'');
   });
-  // Couple lines — derived from sIds, deduplicated
+
+  // Edges — primary (tree parent = pIds[0])
+  const linkG=g.append('g').attr('class','links');
+  linkG.selectAll('path').data(visLinks).enter().append('path')
+    .attr('d',d=>{
+      const sx=d.source.x,sy=d.source.y+NH/2,tx=d.target.x,ty=d.target.y-NH/2,my=(sy+ty)/2;
+      return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
+    })
+    .attr('fill','none').attr('stroke',d=>RC[d.target.person?.rel]||'#444')
+    .attr('stroke-width',1.5).attr('stroke-opacity',0.28);
+
+  // Edges — secondary parent (pIds[1], dashed if far apart)
+  visNodes.forEach(d=>{
+    const p=d.person;if(!p?.pIds||p.pIds.length<2)return;
+    const p2=visNodes.find(n=>+n.id===p.pIds[1]);if(!p2)return;
+    const sx=p2.x,sy=p2.y+NH/2,tx=d.x,ty=d.y-NH/2,my=(sy+ty)/2,span=Math.abs(sx-tx);
+    linkG.append('path')
+      .attr('d',`M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`)
+      .attr('fill','none').attr('stroke',RC[p.rel]||'#444')
+      .attr('stroke-width',1.5)
+      .attr('stroke-opacity',span>500?0.18:0.28)
+      .attr('stroke-dasharray',span>500?'5,3':'');
+  });
+
+  // Spouse lines — horizontal dashed with midpoint dot
   const drawnCouples=new Set();
-  Object.keys(L).forEach(idStr=>{
-    const a=parseInt(idStr);
-    const p=P[a]||EXTRA_MEMBERS[a]; if(!p||!p.sIds||!p.sIds.length)return;
-    p.sIds.forEach(b=>{
-      const key=[Math.min(a,b),Math.max(a,b)].join(',');
-      if(drawnCouples.has(key))return;
-      drawnCouples.add(key);
-      const pa=L[a],pb=L[b]; if(!pa||!pb)return;
-      const x1=Math.min(pa[0],pb[0])+NW/2,x2=Math.max(pa[0],pb[0])-NW/2,y=pa[1];
+  const spouseG=g.append('g').attr('class','spouses');
+  visNodes.forEach(nodeA=>{
+    const p=nodeA.person;if(!p?.sIds)return;
+    p.sIds.forEach(sid=>{
+      const key=[Math.min(+nodeA.id,+sid),Math.max(+nodeA.id,+sid)].join(',');
+      if(drawnCouples.has(key))return;drawnCouples.add(key);
+      const nodeB=visNodes.find(n=>+n.id===+sid);if(!nodeB)return;
+      const x1=Math.min(nodeA.x,nodeB.x)+NW/2,x2=Math.max(nodeA.x,nodeB.x)-NW/2,y=nodeA.y;
       if(x2>x1&&x2-x1<260){
-        o+=`<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#4A2810" stroke-width="1.5" stroke-dasharray="3,2"/>`;
-        o+=`<circle cx="${(x1+x2)/2}" cy="${y}" r="2.5" fill="#4A2810"/>`;
+        spouseG.append('line').attr('x1',x1).attr('y1',y).attr('x2',x2).attr('y2',y)
+          .attr('stroke','#4A2810').attr('stroke-width',1.5).attr('stroke-dasharray','3,2');
+        spouseG.append('circle').attr('cx',(x1+x2)/2).attr('cy',y).attr('r',2.5).attr('fill','#4A2810');
       }
     });
   });
+
   // Nodes
-  Object.entries(L).forEach(([idStr,[x,y]])=>{
-    const id=parseInt(idStr);
-    const p=P[id]||EXTRA_MEMBERS[id]; if(!p)return;
+  const nodeG=g.append('g').attr('class','nodes');
+
+  function countHidden(node){
+    if(!node._children)return 0;
+    return node._children.reduce((sum,c)=>sum+1+c.descendants().length,0);
+  }
+
+  visNodes.forEach(d=>{
+    const p=d.person;if(!p)return;
     const col=RC[p.rel]||'#666';
-    const isYou=id===0;
-    const isCenter=id===_centerId;
-    const nick=p.nicks&&p.nicks[0]?p.nicks[0]:'';
-    const sn=shortName(p);
-    const words=sn.split(' ');const f=words[0];const r=words.slice(1).join(' ');
-    const rx=x-NW/2,ry=y-NH/2;
-    const emo=avatar(p); // gender emoji
-    // Edit pencil (historian only)
-    const editIcon=HISTORIAN_MODE?`<text x="${x+NW/2-8}" y="${y-NH/2+10}" font-size="9" fill="${col}" opacity="0.5" onclick="editNode(event,${id})" style="cursor:pointer">✎</text>`:'';
-    // Highlight ring for search matches
-    const isHit=_searchHits.has(id);
-    const hitRing=isHit?`<rect x="${rx-5}" y="${ry-5}" width="${NW+10}" height="${NH+10}" rx="9" fill="none" stroke="#E8BF60" stroke-width="1.5" opacity="0.7"/>`:'';
-    // Dim non-matches when searching
-    const dim=_searchHits.size>0&&!isHit?'opacity="0.3"':'';
+    const isCenter=+d.id===_centerId;
+    const isHit=_searchHits.has(+d.id);
+    const dimmed=_searchHits.size>0&&!isHit;
+
+    const ng=nodeG.append('g')
+      .attr('transform',`translate(${d.x-NW/2},${d.y-NH/2})`)
+      .style('cursor','pointer')
+      .on('click',()=>openNode(+d.id))
+      .on('contextmenu',event=>showCtx(event,+d.id));
+
+    // 400ms fade-in transition
+    ng.style('opacity',0).transition().duration(400).style('opacity',dimmed?0.3:1);
+
+    if(isHit){
+      ng.append('rect').attr('x',-5).attr('y',-5).attr('width',NW+10).attr('height',NH+10)
+        .attr('rx',9).attr('fill','none').attr('stroke','#E8BF60').attr('stroke-width',1.5).attr('opacity',0.7);
+    }
     if(isCenter){
-      o+=`<g onclick="openNode(${id})" oncontextmenu="showCtx(event,${id})" style="cursor:pointer" ${dim} filter="url(#gm)">
-        ${hitRing}
-        <rect x="${rx-6}" y="${ry-6}" width="${NW+12}" height="${NH+12}" rx="10" fill="${col}" fill-opacity="0.08"/>
-        <rect x="${rx}" y="${ry}" width="${NW}" height="${NH}" rx="6" fill="${col}" fill-opacity="0.28" stroke="${col}" stroke-width="2.5"/>
-        <text x="${rx+7}" y="${y+5}" font-size="13" font-family="Outfit,sans-serif">${emo}</text>
-        <text x="${x+8}" y="${y-6}" text-anchor="middle" fill="${col}" font-size="10" font-weight="700" font-family="Outfit,sans-serif">${f}</text>
-        <text x="${x+8}" y="${y+6}" text-anchor="middle" fill="${col}" font-size="7.5" font-family="Outfit,sans-serif">${r}</text>
-        ${editIcon}
-      </g>`;
-    } else {
-      const isParent=P[_centerId]&&P[_centerId].pIds&&P[_centerId].pIds.includes(id);
-      o+=`<g onclick="openNode(${id})" oncontextmenu="showCtx(event,${id})" style="cursor:pointer" ${dim}>
-        ${hitRing}
-        ${isParent?`<rect x="${rx-3}" y="${ry-3}" width="${NW+6}" height="${NH+6}" rx="8" fill="${col}" fill-opacity="0.09"/>`:''}
-        <rect x="${rx}" y="${ry}" width="${NW}" height="${NH}" rx="5" fill="${col}" fill-opacity="${isParent?.2:.1}" stroke="${col}" stroke-width="${isParent?2:1.5}"/>
-        <text x="${rx+6}" y="${y+5}" font-size="12" font-family="Outfit,sans-serif">${emo}</text>
-        <text x="${x+9}" y="${y-6}" text-anchor="middle" fill="${col}" font-size="9" font-weight="600" font-family="Outfit,sans-serif">${f}</text>
-        <text x="${x+9}" y="${y+5}" text-anchor="middle" fill="${col}" font-size="7.2" font-family="Outfit,sans-serif" opacity="0.8">${r}</text>
-        ${nick?`<text x="${x+9}" y="${y+15}" text-anchor="middle" fill="${col}" font-size="6.5" font-family="Outfit,sans-serif" font-style="italic" opacity="0.6">"${nick}"</text>`:''}
-        ${editIcon}
-      </g>`;
+      ng.append('rect').attr('x',-6).attr('y',-6).attr('width',NW+12).attr('height',NH+12)
+        .attr('rx',10).attr('fill',col).attr('fill-opacity',0.08);
+    }
+    ng.append('rect').attr('width',NW).attr('height',NH).attr('rx',isCenter?6:5)
+      .attr('fill',col).attr('fill-opacity',isCenter?0.28:0.1)
+      .attr('stroke',col).attr('stroke-width',isCenter?2.5:1.5);
+
+    ng.append('text').attr('x',6).attr('y',NH/2+5).attr('font-size',12).text(avatar(p));
+
+    const sn=shortName(p),words=sn.split(' '),f=words[0],r=words.slice(1).join(' ');
+    ng.append('text').attr('x',NW/2+8).attr('y',NH/2-6).attr('text-anchor','middle')
+      .attr('fill',col).attr('font-size',isCenter?10:9).attr('font-weight',isCenter?700:600)
+      .attr('font-family','Outfit,sans-serif').text(f);
+    if(r){
+      ng.append('text').attr('x',NW/2+8).attr('y',NH/2+5).attr('text-anchor','middle')
+        .attr('fill',col).attr('font-size',isCenter?7.5:7.2)
+        .attr('font-family','Outfit,sans-serif').attr('opacity',0.8).text(r);
+    }
+
+    if(HISTORIAN_MODE){
+      ng.append('text').attr('x',NW-8).attr('y',10).attr('font-size',9)
+        .attr('fill',col).attr('opacity',0.5).style('cursor','pointer').text('✎')
+        .on('click',event=>{event.stopPropagation();editNode(event,+d.id);});
+    }
+
+    // Collapse toggle — gold circle at node bottom
+    if(d.children||d._children){
+      const isCollapsed=_collapsed.has(d.id);
+      const hiddenCount=isCollapsed?countHidden(d):0;
+      const btn=ng.append('g').attr('transform',`translate(${NW/2},${NH+7})`)
+        .style('cursor','pointer')
+        .on('click',event=>{
+          event.stopPropagation();
+          if(_collapsed.has(d.id))_collapsed.delete(d.id);else _collapsed.add(d.id);
+          renderTree();
+        });
+      btn.append('circle').attr('r',7).attr('fill','#D08A25').attr('stroke','#0C0702').attr('stroke-width',1);
+      btn.append('text').attr('text-anchor','middle').attr('dy','0.35em')
+        .attr('font-size',isCollapsed&&hiddenCount>0?6:10).attr('fill','#0C0702')
+        .attr('font-weight',700).attr('font-family','Outfit,sans-serif')
+        .text(isCollapsed&&hiddenCount>0?String(hiddenCount):'−');
     }
   });
-  svg.innerHTML=o;
-  // Render unplaced
+
   renderUnplaced();
 }
 
@@ -971,29 +936,25 @@ function showToast(msg){
   setTimeout(()=>t.classList.remove('show'),3000);
 }
 
-// Drag scroll
-(function(){
-  const el=()=>document.getElementById('tree-canvas');
-  let dr=false,sx=0,sy=0,sl=0,st=0;
-  document.addEventListener('mousedown',e=>{const s=el();if(!s||!s.contains(e.target))return;dr=true;sx=e.clientX;sy=e.clientY;sl=s.scrollLeft;st=s.scrollTop;s.style.cursor='grabbing';});
-  document.addEventListener('mousemove',e=>{if(!dr)return;const s=el();if(!s)return;s.scrollLeft=sl-(e.clientX-sx);s.scrollTop=st-(e.clientY-sy);});
-  document.addEventListener('mouseup',()=>{dr=false;const s=el();if(s)s.style.cursor='grab';});
-})();
 
 // ═══════════════════════════════════════════
 //  CENTER NODE — any node can become focus
 // ═══════════════════════════════════════════
 
 function setCenter(id){
-  _centerId = id;
+  _centerId=id;
   renderTree();
-  setTimeout(()=>scrollToNode(id), 60);
+  setTimeout(()=>scrollToNode(id),60);
   showToast('"'+(P[id]||EXTRA_MEMBERS[id])?.name.split(' ')[0]+'" set as center');
 }
 function scrollToNode(id){
-  const pos=L[id]; if(!pos)return;
-  const sc=document.getElementById('tree-canvas');
-  sc.scrollTo({left:Math.max(0,pos[0]-sc.clientWidth/2),top:Math.max(0,pos[1]-sc.clientHeight/2),behavior:'smooth'});
+  const pos=_nodeXY[id];if(!pos||!_d3zoom)return;
+  const svgEl=document.getElementById('main-tree');
+  const W=svgEl.clientWidth||window.innerWidth;
+  const H=svgEl.clientHeight||(window.innerHeight-50);
+  const k=_currentTransform?_currentTransform.k:1;
+  d3.select(svgEl).transition().duration(500)
+    .call(_d3zoom.transform,d3.zoomIdentity.translate(W/2-k*pos.x,H/2-k*pos.y).scale(k));
 }
 
 // ═══════════════════════════════════════════
@@ -1073,7 +1034,6 @@ async function init(){
       });
       _dataReady = true;
       showLoader(false);
-      computeLayout();
       renderTree();
       setTimeout(()=>scrollToNode(findYouNode()), 200);
     } catch(err) {
