@@ -344,7 +344,6 @@ const RC={you:'#E8BF60',parent:'#5A9AE0',grandparent:'#9A72D8','great-grandparen
 const RL={you:'You',parent:'Parent',grandparent:'Grandparent','great-grandparent':'Great-grandparent',ancestor:'Ancestor','aunt-uncle':'Aunt / Uncle',cousin:'Cousin',distant:'In-law / Extended'};
 
 // ── D3 / DAG STATE ──
-const _collapsed=new Set(); // union IDs
 let _d3zoom=null,_d3g=null,_currentTransform=null,_nodeXY={};
 let UNIONS=[],_hoveredUnion=null,_hoveredPerson=null;
 
@@ -382,211 +381,173 @@ async function saveExtra(){
 }
 
 // ═══════════════════════════════════════════
-//  DAG DATA MODEL + LAYOUT
+//  DAG — UNIONS, LAYOUT, RENDER
 // ═══════════════════════════════════════════
 
-function deriveUnions(allPeople){
-  const idSet=new Set(Object.keys(allPeople).map(Number));
-  const map=new Map(); let uid=0;
-  function ckey(ids){return ids.slice().sort((a,b)=>a-b).join(',');}
-  function getOrCreate(ids){
-    const k=ckey(ids);
-    if(!map.has(k)) map.set(k,{id:'u'+(uid++),spouses:ids.slice().sort((a,b)=>a-b),children:[]});
-    return map.get(k);
-  }
-  // Unions from spouse pairs
+function deriveUnions(all){
+  const ids=new Set(Object.keys(all).map(Number));
+  const map=new Map(); let n=0;
+  function key(a){return a.slice().sort((x,y)=>x-y).join(',');}
+  function get(a){const k=key(a);if(!map.has(k))map.set(k,{id:'u'+(n++),spouses:a.slice().sort((x,y)=>x-y),children:[]});return map.get(k);}
   const seen=new Set();
-  Object.entries(allPeople).forEach(([idStr,p])=>{
-    const id=+idStr;
-    (p.sIds||[]).filter(sid=>idSet.has(sid)).forEach(sid=>{
-      const k=ckey([id,sid]);
-      if(!seen.has(k)){seen.add(k);getOrCreate([id,sid]);}
-    });
+  Object.entries(all).forEach(([id,p])=>{
+    (p.sIds||[]).filter(s=>ids.has(s)).forEach(s=>{const k=key([+id,s]);if(!seen.has(k)){seen.add(k);get([+id,s]);}});
   });
-  // Children into unions
-  Object.entries(allPeople).forEach(([idStr,p])=>{
-    const id=+idStr;
-    const pids=(p.pIds||[]).filter(pid=>idSet.has(pid));
-    if(!pids.length) return;
-    const u=getOrCreate(pids);
-    if(!u.children.includes(id)) u.children.push(id);
+  Object.entries(all).forEach(([id,p])=>{
+    const ps=(p.pIds||[]).filter(p=>ids.has(p));
+    if(ps.length){const u=get(ps);if(!u.children.includes(+id))u.children.push(+id);}
   });
-  return Array.from(map.values());
+  return [...map.values()];
 }
 
-function assignGenerations(allPeople,unions){
-  const idSet=new Set(Object.keys(allPeople).map(Number));
+function assignGens(all,unions){
+  const ids=new Set(Object.keys(all).map(Number));
   const gen={};
-  Object.keys(allPeople).forEach(id=>{
-    const pids=(allPeople[id].pIds||[]).filter(pid=>idSet.has(pid));
-    if(!pids.length) gen[+id]=0;
-  });
-  let changed=true;
-  while(changed){
-    changed=false;
-    unions.forEach(u=>{
-      const pGens=u.spouses.map(sid=>gen[sid]).filter(g=>g!==undefined);
-      if(!pGens.length) return;
-      const cGen=Math.max(...pGens)+1;
-      u.children.forEach(cid=>{
-        if(gen[cid]===undefined||gen[cid]<cGen){gen[cid]=cGen;changed=true;}
-      });
-    });
-  }
-  Object.keys(allPeople).forEach(id=>{if(gen[+id]===undefined)gen[+id]=0;});
+  Object.keys(all).forEach(id=>{if(!(all[id].pIds||[]).some(p=>ids.has(p)))gen[+id]=0;});
+  let chg=true;
+  while(chg){chg=false;unions.forEach(u=>{
+    const pg=u.spouses.map(s=>gen[s]).filter(g=>g!==undefined);
+    if(!pg.length)return;
+    const cg=Math.max(...pg)+1;
+    u.children.forEach(c=>{if(gen[c]===undefined||gen[c]<cg){gen[c]=cg;chg=true;}});
+  });}
+  Object.keys(all).forEach(id=>{if(gen[+id]===undefined)gen[+id]=0;});
   return gen;
 }
 
-function computeDAGLayout(allPeople,unions,gens){
-  const SPACING=NW+20, ROW_H=NH+90;
-  const maxGen=Math.max(...Object.values(gens),0);
-  const byGen={};
-  for(let g=0;g<=maxGen;g++) byGen[g]=[];
-  Object.keys(allPeople).forEach(id=>{byGen[gens[+id]]=byGen[gens[+id]]||[];byGen[gens[+id]].push(+id);});
+function layoutPos(all,unions,gens){
+  const GAPX=NW+20, GAPY=160;
+  const maxG=Math.max(...Object.values(gens),0);
+  const byG=Array.from({length:maxG+1},()=>[]);
+  Object.keys(all).forEach(id=>byG[gens[+id]].push(+id));
   const pos={};
-  Object.entries(byGen).forEach(([g,ids])=>{ids.forEach((id,i)=>{pos[id]={x:i*SPACING,y:+g*ROW_H};});});
 
-  function fixOverlaps(g){
-    const atG=(byGen[g]||[]).filter(id=>pos[id]).sort((a,b)=>pos[a].x-pos[b].x);
-    for(let i=1;i<atG.length;i++){
-      if(pos[atG[i]].x<pos[atG[i-1]].x+SPACING) pos[atG[i]].x=pos[atG[i-1]].x+SPACING;
-    }
+  for(let g=0;g<=maxG;g++){
+    const y=g*GAPY, seen=new Set(), units=[];
+    byG[g].forEach(id=>{
+      if(seen.has(id))return; seen.add(id);
+      const sp=(all[id].sIds||[]).find(s=>all[s]&&gens[s]===g&&!seen.has(s));
+      if(sp!==undefined){seen.add(sp);units.push([id,sp]);}else units.push([id]);
+    });
+    units.sort((a,b)=>{
+      const hx=u=>{const ps=u.flatMap(id=>(all[id].pIds||[]).filter(p=>pos[p]));return ps.length?ps.reduce((s,p)=>s+pos[p].x,0)/ps.length:Infinity;};
+      return hx(a)-hx(b);
+    });
+    let cur=0;
+    units.forEach(unit=>{
+      const ps=unit.flatMap(id=>(all[id].pIds||[]).filter(p=>pos[p]));
+      const ideal=ps.length?ps.reduce((s,p)=>s+pos[p].x,0)/ps.length:cur+(unit.length-1)*GAPX/2;
+      const sx=Math.max(cur,ideal-(unit.length-1)*GAPX/2);
+      unit.forEach((id,i)=>pos[id]={x:sx+i*GAPX,y});
+      cur=sx+unit.length*GAPX+GAPX*0.5;
+    });
   }
-  for(let iter=0;iter<6;iter++){
-    // Top-down
-    for(let g=1;g<=maxGen;g++){
-      const uHere=unions.filter(u=>u.spouses.some(sid=>gens[sid]<g)&&u.children.some(cid=>gens[cid]===g))
-        .sort((a,b)=>{
-          const ax=a.spouses.filter(s=>pos[s]).reduce((s,id)=>s+pos[id].x,0)/(a.spouses.filter(s=>pos[s]).length||1);
-          const bx=b.spouses.filter(s=>pos[s]).reduce((s,id)=>s+pos[id].x,0)/(b.spouses.filter(s=>pos[s]).length||1);
-          return ax-bx;
-        });
-      const placed=new Set();
-      uHere.forEach(u=>{
-        const ch=u.children.filter(cid=>gens[cid]===g&&!placed.has(cid));
-        if(!ch.length) return;
-        const sxs=u.spouses.filter(s=>pos[s]).map(s=>pos[s].x);
-        if(!sxs.length) return;
-        const mid=sxs.reduce((a,b)=>a+b)/sxs.length;
-        const w=(ch.length-1)*SPACING;
-        ch.forEach((cid,i)=>{pos[cid]={x:Math.round(mid-w/2+i*SPACING),y:g*ROW_H};placed.add(cid);});
-      });
-      fixOverlaps(g);
-    }
-    // Bottom-up
-    for(let g=maxGen-1;g>=0;g--){
-      unions.filter(u=>u.spouses.some(s=>gens[s]===g)&&u.children.some(c=>gens[c]===g+1)).forEach(u=>{
-        const cxs=u.children.filter(c=>gens[c]===g+1&&pos[c]).map(c=>pos[c].x);
-        if(!cxs.length) return;
-        const cMid=(Math.min(...cxs)+Math.max(...cxs))/2;
-        const spHere=u.spouses.filter(s=>gens[s]===g&&pos[s]);
-        if(!spHere.length) return;
-        const pMid=spHere.reduce((s,id)=>s+pos[id].x,0)/spHere.length;
-        const sh=Math.round(cMid-pMid);
-        if(Math.abs(sh)<2) return;
-        spHere.forEach(s=>{pos[s].x+=sh;});
-      });
-      fixOverlaps(g);
-    }
+
+  // Bottom-up: re-center parents over children
+  for(let g=maxG-1;g>=0;g--){
+    unions.forEach(u=>{
+      const sp=u.spouses.filter(s=>gens[s]===g&&pos[s]);
+      const ch=u.children.filter(c=>gens[c]===g+1&&pos[c]);
+      if(!sp.length||!ch.length)return;
+      const cMid=(Math.min(...ch.map(c=>pos[c].x))+Math.max(...ch.map(c=>pos[c].x)))/2;
+      const pMid=sp.reduce((s,id)=>s+pos[id].x,0)/sp.length;
+      const dx=Math.round(cMid-pMid); if(Math.abs(dx)<2)return;
+      sp.forEach(s=>pos[s].x+=dx);
+    });
+    const row=byG[g].filter(id=>pos[id]).sort((a,b)=>pos[a].x-pos[b].x);
+    for(let i=1;i<row.length;i++)if(pos[row[i]].x<pos[row[i-1]].x+GAPX)pos[row[i]].x=pos[row[i-1]].x+GAPX;
   }
+
   const minX=Math.min(...Object.values(pos).map(p=>p.x));
-  if(minX<SPACING/2){const sh=Math.ceil(SPACING/2-minX);Object.values(pos).forEach(p=>{p.x+=sh;});}
+  if(minX<80)Object.values(pos).forEach(p=>p.x+=80-minX);
   return pos;
 }
 
-function unionColor(u,allPeople){
-  const priority=['you','parent','grandparent','great-grandparent','aunt-uncle','cousin','ancestor','distant'];
-  const all=[...u.spouses,...u.children];
-  for(const rel of priority){if(all.some(id=>allPeople[id]?.rel===rel)) return RC[rel]||'#666';}
-  return '#666';
+// Gender node colors
+const FCOLOR='#C05070'; // female border/text
+const MCOLOR='#4E8FCC'; // male border/text
+
+// Unique color per union, cycling a fixed palette
+const PALETTE=['#5A9AE0','#9A72D8','#4AB8B0','#C87840','#52A86E','#E8BF60','#A08060','#c06080'];
+function makeColors(unions){const m={};unions.forEach((u,i)=>m[u.id]=PALETTE[i%PALETTE.length]);return m;}
+
+// Mirror of app.tsx getPaths — marriage bar + bracket descent or Bézier for in-laws
+function getPaths(u,pos){
+  const paths=[];
+  const sx=u.spouses.map(s=>pos[s]?.x).filter(x=>x!==undefined);
+  const sy=u.spouses.map(s=>pos[s]?.y).filter(y=>y!==undefined);
+  if(!sx.length||!sy.length)return paths;
+  const by=sy[0], bx=(Math.min(...sx)+Math.max(...sx))/2;
+  if(sx.length>=2)paths.push({type:'marriage',d:`M${Math.min(...sx)},${by} H${Math.max(...sx)}`});
+  const ch=u.children.map(c=>pos[c]).filter(Boolean);
+  if(!ch.length)return paths;
+  const cx=ch.map(p=>p.x), cy=ch[0].y;
+  const minCx=Math.min(...cx),maxCx=Math.max(...cx),cMid=(minCx+maxCx)/2;
+  if(Math.abs(bx-cMid)>200&&cx.length===1){
+    const my=by+(cy-by)*0.5;
+    paths.push({type:'descent',d:`M${bx},${by} C${bx},${my} ${cx[0]},${my} ${cx[0]},${cy}`});
+  } else {
+    const ty=by+(cy-by)*0.45;
+    paths.push({type:'descent',d:`M${bx},${by} V${ty}`});
+    if(cx.length>1)paths.push({type:'descent',d:`M${minCx},${ty} H${maxCx}`});
+    cx.forEach(x=>paths.push({type:'descent',d:`M${x},${ty} V${cy}`}));
+  }
+  return paths;
 }
 
-function getHiddenPersons(unions){
-  const hidden=new Set();
-  unions.forEach(u=>{if(_collapsed.has(u.id)) u.children.forEach(cid=>hidden.add(cid));});
-  let changed=true;
-  while(changed){
-    changed=false;
-    unions.forEach(u=>{
-      if(u.spouses.some(sid=>hidden.has(sid))){
-        u.children.forEach(cid=>{if(!hidden.has(cid)){hidden.add(cid);changed=true;}});
-      }
-    });
-  }
-  return hidden;
-}
-
-function updateHoverState(){
-  const activeIds=new Set();
-  if(_hoveredUnion) activeIds.add(_hoveredUnion);
-  if(_hoveredPerson!==null){
-    UNIONS.forEach(u=>{
-      if(u.spouses.includes(+_hoveredPerson)||u.children.includes(+_hoveredPerson)) activeIds.add(u.id);
-    });
-  }
-  const has=activeIds.size>0;
-  d3.selectAll('.union-group').each(function(){
-    const uid=d3.select(this).attr('data-uid');
-    d3.select(this).transition().duration(200).attr('opacity',has&&!activeIds.has(uid)?0.06:1);
+function updateHover(){
+  const active=new Set();
+  if(_hoveredUnion)active.add(_hoveredUnion);
+  if(_hoveredPerson!==null)UNIONS.forEach(u=>{if(u.spouses.includes(+_hoveredPerson)||u.children.includes(+_hoveredPerson))active.add(u.id);});
+  const has=active.size>0;
+  d3.selectAll('.u-grp').each(function(){
+    d3.select(this).transition().duration(200).attr('opacity',has&&!active.has(this.getAttribute('data-uid'))?0.06:1);
   });
-  d3.selectAll('.person-node').each(function(){
-    const pid=+d3.select(this).attr('data-pid');
+  d3.selectAll('.p-nd').each(function(){
+    const pid=+this.getAttribute('data-pid');
     const uids=UNIONS.filter(u=>u.spouses.includes(pid)||u.children.includes(pid)).map(u=>u.id);
-    d3.select(this).transition().duration(200).attr('opacity',has&&!uids.some(u=>activeIds.has(u))?0.1:1);
+    d3.select(this).transition().duration(200).attr('opacity',has&&!uids.some(u=>active.has(u))?0.1:1);
   });
-  document.querySelectorAll('.union-pill').forEach(el=>{
-    el.style.opacity=has&&!activeIds.has(el.dataset.uid)?0.25:1;
+  document.querySelectorAll('.u-pill').forEach(el=>{
+    el.style.opacity=has&&!active.has(el.getAttribute('data-uid'))?0.25:1;
   });
 }
 
-function renderUnionLegend(allPeople){
-  const leg=document.getElementById('union-legend');
-  if(!leg) return;
+function renderLegend(unions,colors,all){
+  const leg=document.getElementById('union-legend');if(!leg)return;
   leg.innerHTML='';
-  UNIONS.filter(u=>u.children.length>0||u.spouses.length>=2).forEach(u=>{
-    const col=unionColor(u,allPeople);
-    const label=u.spouses.map(sid=>allPeople[sid]?.name?.split(' ')[0]||'?').join(' & ');
+  unions.filter(u=>u.children.length||u.spouses.length>=2).forEach(u=>{
+    const col=colors[u.id];
+    const label=u.spouses.map(s=>all[s]?.name?.split(' ')[0]||'?').join(' & ');
     const pill=document.createElement('div');
-    pill.className='union-pill'; pill.dataset.uid=u.id;
-    pill.style.cssText='display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px;border-radius:20px;border:1px solid #1e1e38;transition:all .15s;';
-    pill.innerHTML=`<div style="width:18px;height:2px;background:${col};border-radius:1px;flex-shrink:0"></div><span style="font-size:10px;color:#4A3020;font-family:Outfit,sans-serif;letter-spacing:.5px">${label}</span>`;
-    pill.addEventListener('mouseenter',()=>{
-      _hoveredUnion=u.id; updateHoverState();
-      pill.style.background=col+'22'; pill.style.borderColor=col; pill.querySelector('span').style.color=col;
-    });
-    pill.addEventListener('mouseleave',()=>{
-      _hoveredUnion=null; updateHoverState();
-      pill.style.background=''; pill.style.borderColor='#1e1e38'; pill.querySelector('span').style.color='#4A3020';
-    });
+    pill.className='u-pill'; pill.setAttribute('data-uid',u.id);
+    pill.style.cssText='display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px;border-radius:20px;border:1px solid #3A1E0C;transition:all .15s;';
+    pill.innerHTML=`<div style="width:18px;height:2px;background:${col};border-radius:1px;flex-shrink:0"></div><span style="font-size:10px;color:#8A7060;font-family:Outfit,sans-serif;letter-spacing:.5px">${label}</span>`;
+    pill.addEventListener('mouseenter',()=>{_hoveredUnion=u.id;updateHover();pill.style.background=col+'22';pill.style.borderColor=col;pill.querySelector('span').style.color=col;});
+    pill.addEventListener('mouseleave',()=>{_hoveredUnion=null;updateHover();pill.style.background='';pill.style.borderColor='#3A1E0C';pill.querySelector('span').style.color='#8A7060';});
     leg.appendChild(pill);
   });
 }
 
-// ═══════════════════════════════════════════
-//  TREE RENDER (D3 v7 — DAG)
-// ═══════════════════════════════════════════
+// ─── RENDER ───────────────────────────────
 function renderTree(){
-  const allPeople={...P,...EXTRA_MEMBERS};
-  if(!Object.keys(allPeople).length){renderUnplaced();return;}
+  const all={...P,...EXTRA_MEMBERS};
+  if(!Object.keys(all).length){renderUnplaced();return;}
 
-  UNIONS=deriveUnions(allPeople);
-  const gens=assignGenerations(allPeople,UNIONS);
-  const pos=computeDAGLayout(allPeople,UNIONS,gens);
+  UNIONS=deriveUnions(all);
+  const gens=assignGens(all,UNIONS);
+  const pos=layoutPos(all,UNIONS,gens);
+  const colors=makeColors(UNIONS);
+  const GAPY=160;
 
-  const hidden=getHiddenPersons(UNIONS);
-  const visIds=Object.keys(allPeople).map(Number).filter(id=>!hidden.has(id));
-  const visUnions=UNIONS.filter(u=>!u.spouses.every(sid=>hidden.has(sid)));
-
-  const visPosArr=visIds.map(id=>pos[id]).filter(Boolean);
-  if(!visPosArr.length){renderUnplaced();return;}
-  const xs=visPosArr.map(p=>p.x),ys=visPosArr.map(p=>p.y);
+  const posVals=Object.values(pos);
+  const xs=posVals.map(p=>p.x),ys=posVals.map(p=>p.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs);
   const totalW=Math.max(window.innerWidth,maxX-minX+NW+200);
   const totalH=Math.max(window.innerHeight*0.8,Math.max(...ys)+NH+120);
   const offsetX=totalW/2-(minX+maxX)/2;
 
-  _nodeXY={};
-  visIds.forEach(id=>{if(pos[id])_nodeXY[id]={x:pos[id].x,y:pos[id].y};});
+  _nodeXY={};Object.keys(pos).forEach(id=>_nodeXY[+id]=pos[+id]);
 
   const svgEl=document.getElementById('main-tree');
   const svg=d3.select(svgEl).attr('width',totalW).attr('height',totalH);
@@ -595,146 +556,87 @@ function renderTree(){
   _d3g=g;
 
   if(!_d3zoom){
-    _d3zoom=d3.zoom().scaleExtent([0.2,3]).on('zoom',event=>{
-      _currentTransform=event.transform;
-      if(_d3g)_d3g.attr('transform',event.transform);
-    });
+    _d3zoom=d3.zoom().scaleExtent([0.2,3]).on('zoom',e=>{_currentTransform=e.transform;if(_d3g)_d3g.attr('transform',e.transform);});
   }
   svg.call(_d3zoom);
-  if(_currentTransform) svg.call(_d3zoom.transform,_currentTransform);
+  if(_currentTransform)svg.call(_d3zoom.transform,_currentTransform);
   else svg.call(_d3zoom.transform,d3.zoomIdentity.translate(offsetX,60));
 
-  // Row lane lines + labels
-  const ROW_H=NH+90;
-  const maxGen=Math.max(...Object.values(gens),0);
-  const rowNames=['3× great-grandparents','2× great-grandparents','great-grandparents','grandparents','parents · aunts & uncles · cousins','you'];
-  const laneG=g.append('g').attr('class','rows');
-  for(let i=0;i<=maxGen;i++){
-    const y=i*ROW_H;
-    laneG.append('line').attr('x1',minX-200).attr('y1',y+NH/2+3)
-      .attr('x2',maxX+200).attr('y2',y+NH/2+3)
-      .attr('stroke','#1A0804').attr('stroke-width',1);
-    laneG.append('text').attr('x',minX-190).attr('y',y+4)
-      .attr('fill','#3A2010').attr('font-size',8).attr('font-family','Outfit,sans-serif')
-      .text(rowNames[i]||'');
+  // Generation lane banding (alternating earthy tones)
+  const maxG=Math.max(...Object.values(gens),0);
+  const rowLabels=['3× great-grandparents','2× great-grandparents','great-grandparents','grandparents','parents · aunts & uncles','you · siblings'];
+  const laneG=g.append('g');
+  for(let i=0;i<=maxG;i++){
+    if(i%2===0){
+      laneG.append('rect')
+        .attr('x',minX-300).attr('y',i*GAPY-GAPY/2)
+        .attr('width',maxX-minX+600).attr('height',GAPY)
+        .attr('fill','#160D05').attr('opacity',0.55);
+    }
+    laneG.append('text').attr('x',minX-290).attr('y',i*GAPY-GAPY/2+14)
+      .attr('fill','#6A4A30').attr('font-size',7.5).attr('font-family','Outfit,sans-serif')
+      .attr('letter-spacing',1.5).text((rowLabels[i]||'').toUpperCase());
   }
 
-  // Union lines — marriage bars + bracket descent
-  const lineG=g.append('g').attr('class','union-lines');
-  visUnions.forEach(u=>{
-    const col=unionColor(u,allPeople);
-    const spPos=u.spouses.filter(sid=>pos[sid]&&!hidden.has(sid)).map(sid=>({id:sid,...pos[sid]}));
-    const chPos=u.children.filter(cid=>pos[cid]&&!hidden.has(cid)).map(cid=>({id:cid,...pos[cid]}));
-    if(!spPos.length) return;
-
-    const ug=lineG.append('g').attr('class','union-group').attr('data-uid',u.id);
-
-    // Marriage bar (dashed horizontal + midpoint dot)
-    if(spPos.length>=2){
-      const bx1=Math.min(...spPos.map(p=>p.x))+NW/2;
-      const bx2=Math.max(...spPos.map(p=>p.x))-NW/2;
-      const by=spPos[0].y;
-      if(bx2>bx1){
-        ug.append('line').attr('x1',bx1).attr('y1',by).attr('x2',bx2).attr('y2',by)
-          .attr('stroke',col).attr('stroke-width',1.5).attr('stroke-dasharray','5,4').attr('opacity',0.85);
-        ug.append('circle').attr('cx',(bx1+bx2)/2).attr('cy',by).attr('r',2.5).attr('fill',col).attr('opacity',0.9);
-      }
-    }
-
-    // Bracket descent
-    if(chPos.length){
-      const midX=spPos.reduce((s,p)=>s+p.x,0)/spPos.length;
-      const parentY=spPos[0].y;
-      const childY=chPos[0].y;
-      const gap=childY-NH/2-(parentY+NH/2);
-      const trunkY=parentY+NH/2+gap*0.45;
-      const cxs=chPos.map(p=>p.x);
-
-      ug.append('line').attr('x1',midX).attr('y1',parentY+NH/2)
-        .attr('x2',midX).attr('y2',trunkY)
-        .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
-      if(cxs.length>1){
-        ug.append('line').attr('x1',Math.min(...cxs)).attr('y1',trunkY)
-          .attr('x2',Math.max(...cxs)).attr('y2',trunkY)
-          .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
-      }
-      chPos.forEach(cp=>{
-        ug.append('line').attr('x1',cp.x).attr('y1',trunkY).attr('x2',cp.x).attr('y2',childY-NH/2)
-          .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
-      });
-
-      // Collapse toggle on trunk
-      const isCollapsed=_collapsed.has(u.id);
-      const descCount=u.children.reduce((s,cid)=>{
-        const sub=UNIONS.filter(u2=>u2.spouses.includes(cid));
-        return s+sub.reduce((s2,u2)=>s2+u2.children.length,0);
-      },0);
-      const btn=lineG.append('g').attr('transform',`translate(${midX},${parentY+NH/2+7})`)
-        .style('cursor','pointer')
-        .on('click',event=>{
-          event.stopPropagation();
-          if(_collapsed.has(u.id))_collapsed.delete(u.id);else _collapsed.add(u.id);
-          renderTree();
-        });
-      btn.append('circle').attr('r',7).attr('fill','#D08A25').attr('stroke','#0C0702').attr('stroke-width',1);
-      btn.append('text').attr('text-anchor','middle').attr('dy','0.35em')
-        .attr('font-size',isCollapsed&&descCount>0?6:10).attr('fill','#0C0702')
-        .attr('font-weight',700).attr('font-family','Outfit,sans-serif')
-        .text(isCollapsed&&descCount>0?String(descCount):'−');
+  // Union paths — drawn below nodes
+  const lineG=g.append('g');
+  UNIONS.forEach(u=>{
+    const col=colors[u.id];
+    const paths=getPaths(u,pos);
+    if(!paths.length)return;
+    const ug=lineG.append('g').attr('class','u-grp').attr('data-uid',u.id);
+    paths.forEach(p=>{
+      ug.append('path').attr('d',p.d).attr('fill','none')
+        .attr('stroke',col)
+        .attr('stroke-width',p.type==='marriage'?2:1.8)
+        .attr('stroke-dasharray',p.type==='marriage'?'6,4':'none')
+        .attr('opacity',p.type==='marriage'?0.9:0.7);
+    });
+    // midpoint dot where descent trunk begins
+    const sx2=u.spouses.map(s=>pos[s]?.x).filter(x=>x!==undefined);
+    const sy2=u.spouses.map(s=>pos[s]?.y).filter(y=>y!==undefined);
+    if(sx2.length>=2&&sy2.length){
+      const dotX=(Math.min(...sx2)+Math.max(...sx2))/2;
+      ug.append('circle').attr('cx',dotX).attr('cy',sy2[0]).attr('r',3).attr('fill',col).attr('opacity',1);
     }
   });
 
-  // Person nodes
-  const nodeG=g.append('g').attr('class','nodes');
-  visIds.forEach(id=>{
-    const p=allPeople[id];if(!p||!pos[id])return;
-    const {x,y}=pos[id];
-    const col=RC[p.rel]||'#666';
-    const isCenter=id===_centerId;
-    const isHit=_searchHits.has(id);
+  // Person nodes — drawn on top of paths
+  const nodeG=g.append('g');
+  Object.keys(all).forEach(id=>{
+    const p=all[id];if(!pos[+id])return;
+    const {x,y}=pos[+id];
+    const col=gender(p)==='f'?FCOLOR:MCOLOR;
+    const isCenter=+id===_centerId, isHit=_searchHits.has(+id);
     const dimmed=_searchHits.size>0&&!isHit;
 
-    const ng=nodeG.append('g').attr('class','person-node').attr('data-pid',id)
-      .attr('transform',`translate(${x-NW/2},${y-NH/2})`)
-      .style('cursor','pointer')
-      .on('click',()=>openNode(id))
-      .on('contextmenu',event=>showCtx(event,id))
-      .on('mouseenter',()=>{_hoveredPerson=id;updateHoverState();})
-      .on('mouseleave',()=>{_hoveredPerson=null;updateHoverState();});
+    const ng=nodeG.append('g').attr('class','p-nd').attr('data-pid',id)
+      .attr('transform',`translate(${x-NW/2},${y-NH/2})`).style('cursor','pointer')
+      .on('click',()=>openNode(+id)).on('contextmenu',e=>showCtx(e,+id))
+      .on('mouseenter',()=>{_hoveredPerson=+id;updateHover();})
+      .on('mouseleave',()=>{_hoveredPerson=null;updateHover();});
 
     ng.style('opacity',0).transition().duration(400).style('opacity',dimmed?0.3:1);
 
-    if(isHit){
-      ng.append('rect').attr('x',-5).attr('y',-5).attr('width',NW+10).attr('height',NH+10)
-        .attr('rx',9).attr('fill','none').attr('stroke','#E8BF60').attr('stroke-width',1.5).attr('opacity',0.7);
-    }
-    if(isCenter){
-      ng.append('rect').attr('x',-6).attr('y',-6).attr('width',NW+12).attr('height',NH+12)
-        .attr('rx',10).attr('fill',col).attr('fill-opacity',0.08);
-    }
-    ng.append('rect').attr('width',NW).attr('height',NH).attr('rx',isCenter?6:5)
-      .attr('fill',col).attr('fill-opacity',isCenter?0.28:0.1)
-      .attr('stroke',col).attr('stroke-width',isCenter?2.5:1.5);
+    if(isHit)ng.append('rect').attr('x',-5).attr('y',-5).attr('width',NW+10).attr('height',NH+10).attr('rx',9).attr('fill','none').attr('stroke','#E8BF60').attr('stroke-width',1.5).attr('opacity',0.7);
+    if(isCenter)ng.append('rect').attr('x',-6).attr('y',-6).attr('width',NW+12).attr('height',NH+12).attr('rx',10).attr('fill','#E8BF60').attr('fill-opacity',0.08);
 
+    ng.append('rect').attr('width',NW).attr('height',NH).attr('rx',isCenter?6:5)
+      .attr('fill','#0C0702').attr('fill-opacity',1).attr('stroke',col).attr('stroke-width',isCenter?2.5:1.5);
     ng.append('text').attr('x',6).attr('y',NH/2+5).attr('font-size',12).text(avatar(p));
-    const sn=shortName(p),words=sn.split(' '),f=words[0],r=words.slice(1).join(' ');
+
+    const sn=shortName(p),ws=sn.split(' '),f=ws[0],r=ws.slice(1).join(' ');
     ng.append('text').attr('x',NW/2+8).attr('y',NH/2-6).attr('text-anchor','middle')
-      .attr('fill',col).attr('font-size',isCenter?10:9).attr('font-weight',isCenter?700:600)
-      .attr('font-family','Outfit,sans-serif').text(f);
-    if(r){
-      ng.append('text').attr('x',NW/2+8).attr('y',NH/2+5).attr('text-anchor','middle')
-        .attr('fill',col).attr('font-size',isCenter?7.5:7.2)
-        .attr('font-family','Outfit,sans-serif').attr('opacity',0.8).text(r);
-    }
-    if(HISTORIAN_MODE){
-      ng.append('text').attr('x',NW-8).attr('y',10).attr('font-size',9)
-        .attr('fill',col).attr('opacity',0.5).style('cursor','pointer').text('✎')
-        .on('click',event=>{event.stopPropagation();editNode(event,id);});
-    }
+      .attr('fill',col).attr('font-size',isCenter?10:9).attr('font-weight',isCenter?700:600).attr('font-family','Outfit,sans-serif').text(f);
+    if(r)ng.append('text').attr('x',NW/2+8).attr('y',NH/2+5).attr('text-anchor','middle')
+      .attr('fill',col).attr('font-size',isCenter?7.5:7.2).attr('font-family','Outfit,sans-serif').attr('opacity',0.8).text(r);
+    if(HISTORIAN_MODE)ng.append('text').attr('x',NW-8).attr('y',10).attr('font-size',9)
+      .attr('fill',col).attr('opacity',0.5).style('cursor','pointer').text('✎')
+      .on('click',e=>{e.stopPropagation();editNode(e,+id);});
   });
 
   renderUnplaced();
-  renderUnionLegend(allPeople);
+  renderLegend(UNIONS,colors,all);
 }
 
 function renderUnplaced(){
