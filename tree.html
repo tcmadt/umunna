@@ -172,6 +172,7 @@ select option{background:var(--bg2);}
 <div class="tree-canvas" id="tree-canvas">
   <svg id="main-tree"></svg>
 </div>
+<div id="union-legend" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:.75rem 1.5rem;border-top:1px solid var(--border);background:rgba(12,7,2,.7);position:relative;z-index:1;min-height:2.5rem;"></div>
 
 <!-- UNPLACED (hidden by default) -->
 <div class="unplaced-section" id="unplaced-section" style="display:none">
@@ -342,9 +343,10 @@ const NW=110, NH=46;
 const RC={you:'#E8BF60',parent:'#5A9AE0',grandparent:'#9A72D8','great-grandparent':'#C87840',ancestor:'#A08060','aunt-uncle':'#4AB8B0',cousin:'#52A86E',distant:'#666'};
 const RL={you:'You',parent:'Parent',grandparent:'Grandparent','great-grandparent':'Great-grandparent',ancestor:'Ancestor','aunt-uncle':'Aunt / Uncle',cousin:'Cousin',distant:'In-law / Extended'};
 
-// ── D3 STATE ──
-const _collapsed=new Set();
+// ── D3 / DAG STATE ──
+const _collapsed=new Set(); // union IDs
 let _d3zoom=null,_d3g=null,_currentTransform=null,_nodeXY={};
+let UNIONS=[],_hoveredUnion=null,_hoveredPerson=null;
 
 // ── GENDER FROM TITLE ──
 function gender(p){ return p.g==='f' ? 'f' : 'm'; }
@@ -380,94 +382,218 @@ async function saveExtra(){
 }
 
 // ═══════════════════════════════════════════
-//  TREE RENDER (D3 v7)
+//  DAG DATA MODEL + LAYOUT
 // ═══════════════════════════════════════════
 
+function deriveUnions(allPeople){
+  const idSet=new Set(Object.keys(allPeople).map(Number));
+  const map=new Map(); let uid=0;
+  function ckey(ids){return ids.slice().sort((a,b)=>a-b).join(',');}
+  function getOrCreate(ids){
+    const k=ckey(ids);
+    if(!map.has(k)) map.set(k,{id:'u'+(uid++),spouses:ids.slice().sort((a,b)=>a-b),children:[]});
+    return map.get(k);
+  }
+  // Unions from spouse pairs
+  const seen=new Set();
+  Object.entries(allPeople).forEach(([idStr,p])=>{
+    const id=+idStr;
+    (p.sIds||[]).filter(sid=>idSet.has(sid)).forEach(sid=>{
+      const k=ckey([id,sid]);
+      if(!seen.has(k)){seen.add(k);getOrCreate([id,sid]);}
+    });
+  });
+  // Children into unions
+  Object.entries(allPeople).forEach(([idStr,p])=>{
+    const id=+idStr;
+    const pids=(p.pIds||[]).filter(pid=>idSet.has(pid));
+    if(!pids.length) return;
+    const u=getOrCreate(pids);
+    if(!u.children.includes(id)) u.children.push(id);
+  });
+  return Array.from(map.values());
+}
+
+function assignGenerations(allPeople,unions){
+  const idSet=new Set(Object.keys(allPeople).map(Number));
+  const gen={};
+  Object.keys(allPeople).forEach(id=>{
+    const pids=(allPeople[id].pIds||[]).filter(pid=>idSet.has(pid));
+    if(!pids.length) gen[+id]=0;
+  });
+  let changed=true;
+  while(changed){
+    changed=false;
+    unions.forEach(u=>{
+      const pGens=u.spouses.map(sid=>gen[sid]).filter(g=>g!==undefined);
+      if(!pGens.length) return;
+      const cGen=Math.max(...pGens)+1;
+      u.children.forEach(cid=>{
+        if(gen[cid]===undefined||gen[cid]<cGen){gen[cid]=cGen;changed=true;}
+      });
+    });
+  }
+  Object.keys(allPeople).forEach(id=>{if(gen[+id]===undefined)gen[+id]=0;});
+  return gen;
+}
+
+function computeDAGLayout(allPeople,unions,gens){
+  const SPACING=NW+20, ROW_H=NH+90;
+  const maxGen=Math.max(...Object.values(gens),0);
+  const byGen={};
+  for(let g=0;g<=maxGen;g++) byGen[g]=[];
+  Object.keys(allPeople).forEach(id=>{byGen[gens[+id]]=byGen[gens[+id]]||[];byGen[gens[+id]].push(+id);});
+  const pos={};
+  Object.entries(byGen).forEach(([g,ids])=>{ids.forEach((id,i)=>{pos[id]={x:i*SPACING,y:+g*ROW_H};});});
+
+  function fixOverlaps(g){
+    const atG=(byGen[g]||[]).filter(id=>pos[id]).sort((a,b)=>pos[a].x-pos[b].x);
+    for(let i=1;i<atG.length;i++){
+      if(pos[atG[i]].x<pos[atG[i-1]].x+SPACING) pos[atG[i]].x=pos[atG[i-1]].x+SPACING;
+    }
+  }
+  for(let iter=0;iter<6;iter++){
+    // Top-down
+    for(let g=1;g<=maxGen;g++){
+      const uHere=unions.filter(u=>u.spouses.some(sid=>gens[sid]<g)&&u.children.some(cid=>gens[cid]===g))
+        .sort((a,b)=>{
+          const ax=a.spouses.filter(s=>pos[s]).reduce((s,id)=>s+pos[id].x,0)/(a.spouses.filter(s=>pos[s]).length||1);
+          const bx=b.spouses.filter(s=>pos[s]).reduce((s,id)=>s+pos[id].x,0)/(b.spouses.filter(s=>pos[s]).length||1);
+          return ax-bx;
+        });
+      const placed=new Set();
+      uHere.forEach(u=>{
+        const ch=u.children.filter(cid=>gens[cid]===g&&!placed.has(cid));
+        if(!ch.length) return;
+        const sxs=u.spouses.filter(s=>pos[s]).map(s=>pos[s].x);
+        if(!sxs.length) return;
+        const mid=sxs.reduce((a,b)=>a+b)/sxs.length;
+        const w=(ch.length-1)*SPACING;
+        ch.forEach((cid,i)=>{pos[cid]={x:Math.round(mid-w/2+i*SPACING),y:g*ROW_H};placed.add(cid);});
+      });
+      fixOverlaps(g);
+    }
+    // Bottom-up
+    for(let g=maxGen-1;g>=0;g--){
+      unions.filter(u=>u.spouses.some(s=>gens[s]===g)&&u.children.some(c=>gens[c]===g+1)).forEach(u=>{
+        const cxs=u.children.filter(c=>gens[c]===g+1&&pos[c]).map(c=>pos[c].x);
+        if(!cxs.length) return;
+        const cMid=(Math.min(...cxs)+Math.max(...cxs))/2;
+        const spHere=u.spouses.filter(s=>gens[s]===g&&pos[s]);
+        if(!spHere.length) return;
+        const pMid=spHere.reduce((s,id)=>s+pos[id].x,0)/spHere.length;
+        const sh=Math.round(cMid-pMid);
+        if(Math.abs(sh)<2) return;
+        spHere.forEach(s=>{pos[s].x+=sh;});
+      });
+      fixOverlaps(g);
+    }
+  }
+  const minX=Math.min(...Object.values(pos).map(p=>p.x));
+  if(minX<SPACING/2){const sh=Math.ceil(SPACING/2-minX);Object.values(pos).forEach(p=>{p.x+=sh;});}
+  return pos;
+}
+
+function unionColor(u,allPeople){
+  const priority=['you','parent','grandparent','great-grandparent','aunt-uncle','cousin','ancestor','distant'];
+  const all=[...u.spouses,...u.children];
+  for(const rel of priority){if(all.some(id=>allPeople[id]?.rel===rel)) return RC[rel]||'#666';}
+  return '#666';
+}
+
+function getHiddenPersons(unions){
+  const hidden=new Set();
+  unions.forEach(u=>{if(_collapsed.has(u.id)) u.children.forEach(cid=>hidden.add(cid));});
+  let changed=true;
+  while(changed){
+    changed=false;
+    unions.forEach(u=>{
+      if(u.spouses.some(sid=>hidden.has(sid))){
+        u.children.forEach(cid=>{if(!hidden.has(cid)){hidden.add(cid);changed=true;}});
+      }
+    });
+  }
+  return hidden;
+}
+
+function updateHoverState(){
+  const activeIds=new Set();
+  if(_hoveredUnion) activeIds.add(_hoveredUnion);
+  if(_hoveredPerson!==null){
+    UNIONS.forEach(u=>{
+      if(u.spouses.includes(+_hoveredPerson)||u.children.includes(+_hoveredPerson)) activeIds.add(u.id);
+    });
+  }
+  const has=activeIds.size>0;
+  d3.selectAll('.union-group').each(function(){
+    const uid=d3.select(this).attr('data-uid');
+    d3.select(this).transition().duration(200).attr('opacity',has&&!activeIds.has(uid)?0.06:1);
+  });
+  d3.selectAll('.person-node').each(function(){
+    const pid=+d3.select(this).attr('data-pid');
+    const uids=UNIONS.filter(u=>u.spouses.includes(pid)||u.children.includes(pid)).map(u=>u.id);
+    d3.select(this).transition().duration(200).attr('opacity',has&&!uids.some(u=>activeIds.has(u))?0.1:1);
+  });
+  document.querySelectorAll('.union-pill').forEach(el=>{
+    el.style.opacity=has&&!activeIds.has(el.dataset.uid)?0.25:1;
+  });
+}
+
+function renderUnionLegend(allPeople){
+  const leg=document.getElementById('union-legend');
+  if(!leg) return;
+  leg.innerHTML='';
+  UNIONS.filter(u=>u.children.length>0||u.spouses.length>=2).forEach(u=>{
+    const col=unionColor(u,allPeople);
+    const label=u.spouses.map(sid=>allPeople[sid]?.name?.split(' ')[0]||'?').join(' & ');
+    const pill=document.createElement('div');
+    pill.className='union-pill'; pill.dataset.uid=u.id;
+    pill.style.cssText='display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px;border-radius:20px;border:1px solid #1e1e38;transition:all .15s;';
+    pill.innerHTML=`<div style="width:18px;height:2px;background:${col};border-radius:1px;flex-shrink:0"></div><span style="font-size:10px;color:#4A3020;font-family:Outfit,sans-serif;letter-spacing:.5px">${label}</span>`;
+    pill.addEventListener('mouseenter',()=>{
+      _hoveredUnion=u.id; updateHoverState();
+      pill.style.background=col+'22'; pill.style.borderColor=col; pill.querySelector('span').style.color=col;
+    });
+    pill.addEventListener('mouseleave',()=>{
+      _hoveredUnion=null; updateHoverState();
+      pill.style.background=''; pill.style.borderColor='#1e1e38'; pill.querySelector('span').style.color='#4A3020';
+    });
+    leg.appendChild(pill);
+  });
+}
+
+// ═══════════════════════════════════════════
+//  TREE RENDER (D3 v7 — DAG)
+// ═══════════════════════════════════════════
 function renderTree(){
   const allPeople={...P,...EXTRA_MEMBERS};
   if(!Object.keys(allPeople).length){renderUnplaced();return;}
 
-  const svgEl=document.getElementById('main-tree');
-  const W=window.innerWidth;
-  const H=Math.round(window.innerHeight*0.8);
+  UNIONS=deriveUnions(allPeople);
+  const gens=assignGenerations(allPeople,UNIONS);
+  const pos=computeDAGLayout(allPeople,UNIONS,gens);
 
-  // Build stratify input — pIds[0] is tree parent, fall back to synthetic __root__
-  const idSet=new Set(Object.keys(allPeople).map(Number));
-  const items=[{id:'__root__',parentId:null}];
-  Object.entries(allPeople).forEach(([id,p])=>{
-    const pid=p.pIds&&p.pIds.length>0&&idSet.has(p.pIds[0])?String(p.pIds[0]):'__root__';
-    items.push({id:String(id),parentId:pid});
-  });
+  const hidden=getHiddenPersons(UNIONS);
+  const visIds=Object.keys(allPeople).map(Number).filter(id=>!hidden.has(id));
+  const visUnions=UNIONS.filter(u=>!u.spouses.every(sid=>hidden.has(sid)));
 
-  let root;
-  try{
-    root=d3.stratify().id(d=>d.id).parentId(d=>d.parentId)(items);
-  }catch(e){console.error('D3 stratify error',e);renderUnplaced();return;}
-
-  // Attach person data
-  root.each(node=>{if(node.id!=='__root__')node.person=allPeople[+node.id];});
-
-  // Apply collapse state
-  root.eachBefore(node=>{
-    if(_collapsed.has(node.id)){
-      if(node.children){node._children=node.children;node.children=null;}
-    } else {
-      if(node._children){node.children=node._children;node._children=null;}
-    }
-  });
-
-  // D3 tree layout
-  d3.tree().nodeSize([NW+20,NH+90])(root);
-
-  const visNodes=root.descendants().filter(d=>d.id!=='__root__');
-  const visLinks=root.links().filter(d=>d.source.id!=='__root__'&&d.target.id!=='__root__');
-
-  // Post-process: move married-in spouses (parent===__root__) adjacent to their in-tree partner
-  const idToNode=new Map(visNodes.map(n=>[+n.id,n]));
-  const movedSpouses=new Set();
-  visNodes.forEach(nodeA=>{
-    const p=nodeA.person;if(!p?.sIds)return;
-    p.sIds.forEach(sid=>{
-      const nodeB=idToNode.get(+sid);if(!nodeB)return;
-      const aRoot=nodeA.parent?.id==='__root__';
-      const bRoot=nodeB.parent?.id==='__root__';
-      if(bRoot&&!aRoot&&!movedSpouses.has(+nodeB.id)){
-        nodeB.y=nodeA.y; nodeB.x=nodeA.x+NW+20; movedSpouses.add(+nodeB.id);
-      } else if(aRoot&&!bRoot&&!movedSpouses.has(+nodeA.id)){
-        nodeA.y=nodeB.y; nodeA.x=nodeB.x+NW+20; movedSpouses.add(+nodeA.id);
-      }
-    });
-  });
-
-  // Resolve overlaps row-by-row after spouse repositioning
-  const MIN_GAP=NW+20;
-  const byRow=new Map();
-  visNodes.forEach(n=>{const row=Math.round(n.y);if(!byRow.has(row))byRow.set(row,[]);byRow.get(row).push(n);});
-  byRow.forEach(nodes=>{
-    nodes.sort((a,b)=>a.x-b.x);
-    for(let i=1;i<nodes.length;i++){
-      if(nodes[i].x<nodes[i-1].x+MIN_GAP) nodes[i].x=nodes[i-1].x+MIN_GAP;
-    }
-  });
-
-  // Canvas sizing (after spouse repositioning)
-  const xs=visNodes.map(d=>d.x),ys=visNodes.map(d=>d.y);
+  const visPosArr=visIds.map(id=>pos[id]).filter(Boolean);
+  if(!visPosArr.length){renderUnplaced();return;}
+  const xs=visPosArr.map(p=>p.x),ys=visPosArr.map(p=>p.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs);
-  const totalW=Math.max(W,maxX-minX+NW+200);
-  const totalH=Math.max(H,Math.max(...ys)+NH+120);
+  const totalW=Math.max(window.innerWidth,maxX-minX+NW+200);
+  const totalH=Math.max(window.innerHeight*0.8,Math.max(...ys)+NH+120);
   const offsetX=totalW/2-(minX+maxX)/2;
 
-  // Cache node positions (group-space coords) for scrollToNode
   _nodeXY={};
-  visNodes.forEach(d=>{_nodeXY[+d.id]={x:d.x,y:d.y};});
+  visIds.forEach(id=>{if(pos[id])_nodeXY[id]={x:pos[id].x,y:pos[id].y};});
 
-  // SVG setup
+  const svgEl=document.getElementById('main-tree');
   const svg=d3.select(svgEl).attr('width',totalW).attr('height',totalH);
   svg.selectAll('*').remove();
   const g=svg.append('g').attr('class','tree-root');
   _d3g=g;
 
-  // Zoom — created once, re-attached each render so _d3g closure is current
   if(!_d3zoom){
     _d3zoom=d3.zoom().scaleExtent([0.2,3]).on('zoom',event=>{
       _currentTransform=event.transform;
@@ -475,89 +601,107 @@ function renderTree(){
     });
   }
   svg.call(_d3zoom);
-  if(_currentTransform){
-    svg.call(_d3zoom.transform,_currentTransform);
-  } else {
-    svg.call(_d3zoom.transform,d3.zoomIdentity.translate(offsetX,60));
-  }
+  if(_currentTransform) svg.call(_d3zoom.transform,_currentTransform);
+  else svg.call(_d3zoom.transform,d3.zoomIdentity.translate(offsetX,60));
 
-  // Row lines + labels
-  const yLevels=[...new Set(visNodes.map(d=>Math.round(d.y)))].sort((a,b)=>a-b);
+  // Row lane lines + labels
+  const ROW_H=NH+90;
+  const maxGen=Math.max(...Object.values(gens),0);
   const rowNames=['3× great-grandparents','2× great-grandparents','great-grandparents','grandparents','parents · aunts & uncles · cousins','you'];
-  const rowG=g.append('g').attr('class','rows');
-  yLevels.forEach((y,i)=>{
-    rowG.append('line').attr('x1',minX-200).attr('y1',y+NH/2+3)
+  const laneG=g.append('g').attr('class','rows');
+  for(let i=0;i<=maxGen;i++){
+    const y=i*ROW_H;
+    laneG.append('line').attr('x1',minX-200).attr('y1',y+NH/2+3)
       .attr('x2',maxX+200).attr('y2',y+NH/2+3)
       .attr('stroke','#1A0804').attr('stroke-width',1);
-    rowG.append('text').attr('x',minX-190).attr('y',y+4)
+    laneG.append('text').attr('x',minX-190).attr('y',y+4)
       .attr('fill','#3A2010').attr('font-size',8).attr('font-family','Outfit,sans-serif')
       .text(rowNames[i]||'');
-  });
-
-  // Edges — primary (tree parent = pIds[0])
-  const linkG=g.append('g').attr('class','links');
-  linkG.selectAll('path').data(visLinks).enter().append('path')
-    .attr('d',d=>{
-      const sx=d.source.x,sy=d.source.y+NH/2,tx=d.target.x,ty=d.target.y-NH/2,my=(sy+ty)/2;
-      return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
-    })
-    .attr('fill','none').attr('stroke',d=>RC[d.target.person?.rel]||'#444')
-    .attr('stroke-width',1.5).attr('stroke-opacity',0.28);
-
-  // Edges — secondary parent (pIds[1], dashed if far apart)
-  visNodes.forEach(d=>{
-    const p=d.person;if(!p?.pIds||p.pIds.length<2)return;
-    const p2=visNodes.find(n=>+n.id===p.pIds[1]);if(!p2)return;
-    const sx=p2.x,sy=p2.y+NH/2,tx=d.x,ty=d.y-NH/2,my=(sy+ty)/2,span=Math.abs(sx-tx);
-    linkG.append('path')
-      .attr('d',`M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`)
-      .attr('fill','none').attr('stroke',RC[p.rel]||'#444')
-      .attr('stroke-width',1.5)
-      .attr('stroke-opacity',span>500?0.18:0.28)
-      .attr('stroke-dasharray',span>500?'5,3':'');
-  });
-
-  // Spouse lines — horizontal dashed with midpoint dot
-  const drawnCouples=new Set();
-  const spouseG=g.append('g').attr('class','spouses');
-  visNodes.forEach(nodeA=>{
-    const p=nodeA.person;if(!p?.sIds)return;
-    p.sIds.forEach(sid=>{
-      const key=[Math.min(+nodeA.id,+sid),Math.max(+nodeA.id,+sid)].join(',');
-      if(drawnCouples.has(key))return;drawnCouples.add(key);
-      const nodeB=visNodes.find(n=>+n.id===+sid);if(!nodeB)return;
-      const x1=Math.min(nodeA.x,nodeB.x)+NW/2,x2=Math.max(nodeA.x,nodeB.x)-NW/2;
-      const y=(nodeA.y+nodeB.y)/2;
-      if(x2>x1){
-        spouseG.append('line').attr('x1',x1).attr('y1',y).attr('x2',x2).attr('y2',y)
-          .attr('stroke','#4A2810').attr('stroke-width',1.5).attr('stroke-dasharray','3,2');
-        spouseG.append('circle').attr('cx',(x1+x2)/2).attr('cy',y).attr('r',2.5).attr('fill','#4A2810');
-      }
-    });
-  });
-
-  // Nodes
-  const nodeG=g.append('g').attr('class','nodes');
-
-  function countHidden(node){
-    if(!node._children)return 0;
-    return node._children.reduce((sum,c)=>sum+1+c.descendants().length,0);
   }
 
-  visNodes.forEach(d=>{
-    const p=d.person;if(!p)return;
+  // Union lines — marriage bars + bracket descent
+  const lineG=g.append('g').attr('class','union-lines');
+  visUnions.forEach(u=>{
+    const col=unionColor(u,allPeople);
+    const spPos=u.spouses.filter(sid=>pos[sid]&&!hidden.has(sid)).map(sid=>({id:sid,...pos[sid]}));
+    const chPos=u.children.filter(cid=>pos[cid]&&!hidden.has(cid)).map(cid=>({id:cid,...pos[cid]}));
+    if(!spPos.length) return;
+
+    const ug=lineG.append('g').attr('class','union-group').attr('data-uid',u.id);
+
+    // Marriage bar (dashed horizontal + midpoint dot)
+    if(spPos.length>=2){
+      const bx1=Math.min(...spPos.map(p=>p.x))+NW/2;
+      const bx2=Math.max(...spPos.map(p=>p.x))-NW/2;
+      const by=spPos[0].y;
+      if(bx2>bx1){
+        ug.append('line').attr('x1',bx1).attr('y1',by).attr('x2',bx2).attr('y2',by)
+          .attr('stroke',col).attr('stroke-width',1.5).attr('stroke-dasharray','5,4').attr('opacity',0.85);
+        ug.append('circle').attr('cx',(bx1+bx2)/2).attr('cy',by).attr('r',2.5).attr('fill',col).attr('opacity',0.9);
+      }
+    }
+
+    // Bracket descent
+    if(chPos.length){
+      const midX=spPos.reduce((s,p)=>s+p.x,0)/spPos.length;
+      const parentY=spPos[0].y;
+      const childY=chPos[0].y;
+      const gap=childY-NH/2-(parentY+NH/2);
+      const trunkY=parentY+NH/2+gap*0.45;
+      const cxs=chPos.map(p=>p.x);
+
+      ug.append('line').attr('x1',midX).attr('y1',parentY+NH/2)
+        .attr('x2',midX).attr('y2',trunkY)
+        .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
+      if(cxs.length>1){
+        ug.append('line').attr('x1',Math.min(...cxs)).attr('y1',trunkY)
+          .attr('x2',Math.max(...cxs)).attr('y2',trunkY)
+          .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
+      }
+      chPos.forEach(cp=>{
+        ug.append('line').attr('x1',cp.x).attr('y1',trunkY).attr('x2',cp.x).attr('y2',childY-NH/2)
+          .attr('stroke',col).attr('stroke-width',1.5).attr('opacity',0.7);
+      });
+
+      // Collapse toggle on trunk
+      const isCollapsed=_collapsed.has(u.id);
+      const descCount=u.children.reduce((s,cid)=>{
+        const sub=UNIONS.filter(u2=>u2.spouses.includes(cid));
+        return s+sub.reduce((s2,u2)=>s2+u2.children.length,0);
+      },0);
+      const btn=lineG.append('g').attr('transform',`translate(${midX},${parentY+NH/2+7})`)
+        .style('cursor','pointer')
+        .on('click',event=>{
+          event.stopPropagation();
+          if(_collapsed.has(u.id))_collapsed.delete(u.id);else _collapsed.add(u.id);
+          renderTree();
+        });
+      btn.append('circle').attr('r',7).attr('fill','#D08A25').attr('stroke','#0C0702').attr('stroke-width',1);
+      btn.append('text').attr('text-anchor','middle').attr('dy','0.35em')
+        .attr('font-size',isCollapsed&&descCount>0?6:10).attr('fill','#0C0702')
+        .attr('font-weight',700).attr('font-family','Outfit,sans-serif')
+        .text(isCollapsed&&descCount>0?String(descCount):'−');
+    }
+  });
+
+  // Person nodes
+  const nodeG=g.append('g').attr('class','nodes');
+  visIds.forEach(id=>{
+    const p=allPeople[id];if(!p||!pos[id])return;
+    const {x,y}=pos[id];
     const col=RC[p.rel]||'#666';
-    const isCenter=+d.id===_centerId;
-    const isHit=_searchHits.has(+d.id);
+    const isCenter=id===_centerId;
+    const isHit=_searchHits.has(id);
     const dimmed=_searchHits.size>0&&!isHit;
 
-    const ng=nodeG.append('g')
-      .attr('transform',`translate(${d.x-NW/2},${d.y-NH/2})`)
+    const ng=nodeG.append('g').attr('class','person-node').attr('data-pid',id)
+      .attr('transform',`translate(${x-NW/2},${y-NH/2})`)
       .style('cursor','pointer')
-      .on('click',()=>openNode(+d.id))
-      .on('contextmenu',event=>showCtx(event,+d.id));
+      .on('click',()=>openNode(id))
+      .on('contextmenu',event=>showCtx(event,id))
+      .on('mouseenter',()=>{_hoveredPerson=id;updateHoverState();})
+      .on('mouseleave',()=>{_hoveredPerson=null;updateHoverState();});
 
-    // 400ms fade-in transition
     ng.style('opacity',0).transition().duration(400).style('opacity',dimmed?0.3:1);
 
     if(isHit){
@@ -573,7 +717,6 @@ function renderTree(){
       .attr('stroke',col).attr('stroke-width',isCenter?2.5:1.5);
 
     ng.append('text').attr('x',6).attr('y',NH/2+5).attr('font-size',12).text(avatar(p));
-
     const sn=shortName(p),words=sn.split(' '),f=words[0],r=words.slice(1).join(' ');
     ng.append('text').attr('x',NW/2+8).attr('y',NH/2-6).attr('text-anchor','middle')
       .attr('fill',col).attr('font-size',isCenter?10:9).attr('font-weight',isCenter?700:600)
@@ -583,33 +726,15 @@ function renderTree(){
         .attr('fill',col).attr('font-size',isCenter?7.5:7.2)
         .attr('font-family','Outfit,sans-serif').attr('opacity',0.8).text(r);
     }
-
     if(HISTORIAN_MODE){
       ng.append('text').attr('x',NW-8).attr('y',10).attr('font-size',9)
         .attr('fill',col).attr('opacity',0.5).style('cursor','pointer').text('✎')
-        .on('click',event=>{event.stopPropagation();editNode(event,+d.id);});
-    }
-
-    // Collapse toggle — gold circle at node bottom
-    if(d.children||d._children){
-      const isCollapsed=_collapsed.has(d.id);
-      const hiddenCount=isCollapsed?countHidden(d):0;
-      const btn=ng.append('g').attr('transform',`translate(${NW/2},${NH+7})`)
-        .style('cursor','pointer')
-        .on('click',event=>{
-          event.stopPropagation();
-          if(_collapsed.has(d.id))_collapsed.delete(d.id);else _collapsed.add(d.id);
-          renderTree();
-        });
-      btn.append('circle').attr('r',7).attr('fill','#D08A25').attr('stroke','#0C0702').attr('stroke-width',1);
-      btn.append('text').attr('text-anchor','middle').attr('dy','0.35em')
-        .attr('font-size',isCollapsed&&hiddenCount>0?6:10).attr('fill','#0C0702')
-        .attr('font-weight',700).attr('font-family','Outfit,sans-serif')
-        .text(isCollapsed&&hiddenCount>0?String(hiddenCount):'−');
+        .on('click',event=>{event.stopPropagation();editNode(event,id);});
     }
   });
 
   renderUnplaced();
+  renderUnionLegend(allPeople);
 }
 
 function renderUnplaced(){
