@@ -15,7 +15,7 @@ const LANE_LABELS = [
 ];
 
 export default function App() {
-  const { people, loading, error } = useSheetData(10);
+  const { people, loading, error } = useSheetData(30);
   const [hoveredUnion, setHoveredUnion] = useState<string | null>(null);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
