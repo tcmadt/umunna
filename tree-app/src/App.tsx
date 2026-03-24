@@ -484,7 +484,7 @@ export default function App() {
           width="100%"
           height="100%"
           preserveAspectRatio="xMidYMid meet"
-          style={{ display: 'block', cursor: dragStart ? 'grabbing' : 'grab', userSelect: 'none' }}
+          style={{ display: 'block', cursor: dragStart ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'none' }}
           onMouseDown={onSvgMouseDown}
           onMouseMove={onSvgMouseMove}
           onMouseUp={onSvgMouseUp}
