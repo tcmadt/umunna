@@ -32,9 +32,9 @@ export default function App() {
 
   useEffect(() => {
     if (!isPrinting) return;
-    window.print();
     const done = () => setIsPrinting(false);
     window.addEventListener('afterprint', done, { once: true });
+    window.print();
     return () => window.removeEventListener('afterprint', done);
   }, [isPrinting]);
 
@@ -355,6 +355,17 @@ export default function App() {
           </div>
         )}
       </div>}
+
+      {/* Cancel button shown on-screen during print preview, hidden from actual print */}
+      {isPrinting && (
+        <button
+          className="no-print"
+          onClick={() => setIsPrinting(false)}
+          style={{ position: 'fixed', top: 16, right: 16, zIndex: 10000, background: '#2a1408', border: '1px solid #B85E28', color: '#E8BF60', borderRadius: 4, padding: '6px 14px', cursor: 'pointer', fontSize: 12 }}
+        >
+          ✕ Cancel
+        </button>
+      )}
 
       {/* Tree card — fills remaining height */}
       <div style={isPrinting ? { position: 'fixed', inset: 0, background: '#0C0702', zIndex: 9999 } : styles.card}>
