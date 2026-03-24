@@ -104,6 +104,32 @@ export default function App() {
   const hasHighlight = highlight !== null;
   const selectedPerson: Person | null = selected !== null ? (people[selected] ?? null) : null;
 
+  // ── Visibility: hide childless-only spouses unless their partner is selected ─
+  const hiddenByDefault = useMemo(() => {
+    const s = new Set<number>();
+    Object.values(people).forEach(person => {
+      const isChild = unions.some(u => u.children.includes(person.id));
+      if (isChild) return;
+      const hasChildrenInAnyUnion = unions.some(u =>
+        u.spouses.includes(person.id) && u.children.length > 0
+      );
+      if (hasChildrenInAnyUnion) return;
+      if (unions.some(u => u.spouses.includes(person.id))) s.add(person.id);
+    });
+    return s;
+  }, [people, unions]);
+
+  const hiddenIds = useMemo(() => {
+    const result = new Set(hiddenByDefault);
+    if (selected !== null) {
+      unions.forEach(u => {
+        if (u.spouses.includes(selected))
+          u.spouses.forEach(s => result.delete(s));
+      });
+    }
+    return result;
+  }, [hiddenByDefault, selected, unions]);
+
   // ── Search ──────────────────────────────────────────────────────────────────
   const searchHits = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -195,6 +221,7 @@ export default function App() {
 
           {/* Union paths */}
           {unions.map(u => {
+            if (u.spouses.some(s => hiddenIds.has(s))) return null;
             const paths = getPaths(u, pos);
             const isActive = activePaths.has(u.id);
             const dimmed = hasHighlight && !isActive;
@@ -215,6 +242,7 @@ export default function App() {
           {Object.values(people).map(person => {
             const p = pos[person.id];
             if (!p) return null;
+            if (hiddenIds.has(person.id)) return null;
             const isFemale = person.g === 'f';
             const isSelected = person.id === selected;
 
