@@ -217,10 +217,18 @@ export default function App() {
   }, [loading]);
 
   // ── Touch pan + pinch zoom ───────────────────────────────────────────────────
+  // Bypass React state during gesture — directly set SVG viewBox attribute for
+  // smooth 60fps. Sync to React state once on touchend so the rest of the app
+  // stays consistent.
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
-    let lastTouches: React.Touch[] | Touch[] = [];
+    let lastTouches: Touch[] = [];
+
+    function applyVb(v: { x: number; y: number; w: number; h: number }) {
+      vbRef.current = v;
+      el!.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
+    }
 
     const onTouchStart = (e: TouchEvent) => {
       didDragRef.current = false;
@@ -232,18 +240,16 @@ export default function App() {
       const cur = vbRef.current ?? { x: 0, y: 0, w: svgWRef.current, h: svgHRef.current };
       const rect = el.getBoundingClientRect();
 
-      if (touches.length === 1 && lastTouches.length === 1) {
-        // Single finger pan
+      if (touches.length === 1 && lastTouches.length >= 1) {
         const dx = touches[0].clientX - lastTouches[0].clientX;
         const dy = touches[0].clientY - lastTouches[0].clientY;
         if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDragRef.current = true;
-        setVb({
+        applyVb({
           ...cur,
           x: cur.x - dx * (cur.w / rect.width),
           y: cur.y - dy * (cur.h / rect.height),
         });
-      } else if (touches.length === 2 && lastTouches.length === 2) {
-        // Two-finger pinch zoom
+      } else if (touches.length === 2 && lastTouches.length >= 2) {
         const prevDist = Math.hypot(
           lastTouches[1].clientX - lastTouches[0].clientX,
           lastTouches[1].clientY - lastTouches[0].clientY,
@@ -254,14 +260,13 @@ export default function App() {
         );
         if (prevDist === 0) { lastTouches = touches; return; }
         const factor = prevDist / newDist;
-        // Zoom toward midpoint of the two fingers
         const midX = (touches[0].clientX + touches[1].clientX) / 2;
         const midY = (touches[0].clientY + touches[1].clientY) / 2;
         const mx = cur.x + (midX - rect.left) / rect.width * cur.w;
         const my = cur.y + (midY - rect.top) / rect.height * cur.h;
         const newW = Math.max(300, Math.min(svgWRef.current, cur.w * factor));
         const newH = Math.max(200, Math.min(svgHRef.current, cur.h * factor));
-        setVb({
+        applyVb({
           x: mx - (mx - cur.x) / cur.w * newW,
           y: my - (my - cur.y) / cur.h * newH,
           w: newW, h: newH,
@@ -270,7 +275,11 @@ export default function App() {
       }
       lastTouches = touches;
     };
-    const onTouchEnd = () => { lastTouches = []; };
+    const onTouchEnd = () => {
+      lastTouches = [];
+      // Commit to React state once — one re-render per gesture, not per frame
+      if (vbRef.current) setVb({ ...vbRef.current });
+    };
 
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: false });
