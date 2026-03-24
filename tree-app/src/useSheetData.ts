@@ -58,7 +58,7 @@ export function useSheetData(limit = 10) {
       setLoading(false);
     };
 
-    script.src = `${ENDPOINT}?callback=${cb}`;
+    script.src = `${ENDPOINT}?callback=${cb}&t=${Date.now()}`;
     script.onerror = () => {
       setError('Failed to load family data');
       setLoading(false);
