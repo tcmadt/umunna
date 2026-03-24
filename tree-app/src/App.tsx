@@ -28,6 +28,15 @@ export default function App() {
   // Phase D state
   const [showSuggest, setShowSuggest] = useState(false);
   const [historianMode, setHistorianMode] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
+
+  useEffect(() => {
+    if (!isPrinting) return;
+    window.print();
+    const done = () => setIsPrinting(false);
+    window.addEventListener('afterprint', done, { once: true });
+    return () => window.removeEventListener('afterprint', done);
+  }, [isPrinting]);
 
   const { unions, gens, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
@@ -309,7 +318,7 @@ export default function App() {
     <div style={styles.page}>
 
       {/* Slim header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', flexShrink: 0, flexWrap: 'wrap' }}>
+      {!isPrinting && <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', flexShrink: 0, flexWrap: 'wrap' }}>
         <h1 style={{ color: '#F0E8D8', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
           UMUNNA — FAMILY TREE
         </h1>
@@ -336,6 +345,8 @@ export default function App() {
         </div>
         {/* Suggest + button */}
         <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
+        {/* PDF export button */}
+        <button onClick={() => setIsPrinting(true)} style={styles.searchBtn} title="Export PDF">⬇ PDF</button>
         {/* Historian badge */}
         {historianMode && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#2a1a04', border: '1px solid #D08A25', borderRadius: 4, padding: '3px 10px' }}>
@@ -343,13 +354,13 @@ export default function App() {
             <button onClick={() => setHistorianMode(false)} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Tree card — fills remaining height */}
-      <div style={styles.card}>
+      <div style={isPrinting ? { position: 'fixed', inset: 0, background: '#0C0702', zIndex: 9999 } : styles.card}>
         <svg
           ref={svgRef}
-          viewBox={vb ? `${vb.x} ${vb.y} ${vb.w} ${vb.h}` : `0 0 ${svgW} ${svgH}`}
+          viewBox={isPrinting ? `0 0 ${svgW} ${svgH}` : (vb ? `${vb.x} ${vb.y} ${vb.w} ${vb.h}` : `0 0 ${svgW} ${svgH}`)}
           width="100%"
           height="100%"
           preserveAspectRatio="xMidYMid meet"
@@ -374,6 +385,7 @@ export default function App() {
           {/* Union paths */}
           {unions.map(u => {
             if (u.spouses.some(s => hiddenIds.has(s))) return null;
+            if (isPrinting && (u.spouses.some(s => people[s]?.pending) || u.children.some(c => people[c]?.pending))) return null;
             const paths = getPaths(u, pos);
             const isActive = activePaths.has(u.id);
             const dimmed = hasHighlight && !isActive;
@@ -395,6 +407,7 @@ export default function App() {
             const p = pos[person.id];
             if (!p) return null;
             if (hiddenIds.has(person.id)) return null;
+            if (isPrinting && person.pending) return null;
             const isFemale = person.g === 'f';
             const isSelected = person.id === selected;
 
@@ -507,7 +520,7 @@ export default function App() {
 
 
       {/* Info panel */}
-      {selectedPerson && (
+      {selectedPerson && !isPrinting && (
         <InfoPanel
           person={selectedPerson}
           people={people}
@@ -519,7 +532,7 @@ export default function App() {
       )}
 
       {/* Suggest modal */}
-      {showSuggest && (
+      {showSuggest && !isPrinting && (
         <SuggestModal people={people} onClose={() => setShowSuggest(false)} />
       )}
     </div>
