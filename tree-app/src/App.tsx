@@ -137,14 +137,15 @@ export default function App() {
 
   const hiddenIds = useMemo(() => {
     const result = new Set(hiddenByDefault);
-    if (selected !== null) {
+    const revealFor = hoveredPerson ?? selected;
+    if (revealFor !== null) {
       unions.forEach(u => {
-        if (u.spouses.includes(selected))
+        if (u.spouses.includes(revealFor))
           u.spouses.forEach(s => result.delete(s));
       });
     }
     return result;
-  }, [hiddenByDefault, selected, unions]);
+  }, [hiddenByDefault, hoveredPerson, selected, unions]);
 
   // Keep dimension refs in sync for wheel handler
   svgWRef.current = svgW;
