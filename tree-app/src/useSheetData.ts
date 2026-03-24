@@ -44,6 +44,7 @@ export function useSheetData(limit = 10) {
           deathYear: String(p.deathYear ?? ''),
           placeOfBirth: String(p.placeOfBirth ?? ''),
           currentLocation: String(p.currentLocation ?? ''),
+          photoUrl: String(p.photoUrl ?? ''),
         };
       });
 

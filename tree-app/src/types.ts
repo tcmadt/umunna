@@ -11,6 +11,7 @@ export interface Person {
   deathYear: string;
   placeOfBirth: string;
   currentLocation: string;
+  photoUrl: string;
 }
 
 export interface Union {

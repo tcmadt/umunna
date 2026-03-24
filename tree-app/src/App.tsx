@@ -269,12 +269,33 @@ export default function App() {
                   strokeWidth={isCurrentHit ? 3 : isSearchHit ? 2 : sw}
                   opacity={nodeOpacity}
                   style={{ transition: 'all 0.2s' }} />
-                <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
-                  opacity={nodeOpacity}
-                  style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
-                  {person.name.split(' ')[0]}
-                </text>
+                {person.photoUrl ? (
+                  <>
+                    <clipPath id={`clip-${person.id}`}>
+                      <circle cx={p.x - NW / 2 + 18} cy={p.y} r={12} />
+                    </clipPath>
+                    <image
+                      href={person.photoUrl}
+                      x={p.x - NW / 2 + 6} y={p.y - 12} width={24} height={24}
+                      clipPath={`url(#clip-${person.id})`}
+                      preserveAspectRatio="xMidYMid slice"
+                      opacity={nodeOpacity}
+                    />
+                    <text x={p.x - NW / 2 + 34} y={p.y} dominantBaseline="middle"
+                      fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
+                      opacity={nodeOpacity}
+                      style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
+                      {person.name.split(' ')[0]}
+                    </text>
+                  </>
+                ) : (
+                  <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
+                    fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
+                    opacity={nodeOpacity}
+                    style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
+                    {person.name.split(' ')[0]}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -305,7 +326,12 @@ function InfoPanel({ person, people, onClose }: {
     <div style={styles.panel}>
       <div style={{ ...styles.panelHead, borderBottom: `1px solid ${accent}44` }}>
         <div>
-          <div style={{ fontSize: 24, marginBottom: 4 }}>{isFemale ? '👩🏾' : '👨🏾'}</div>
+          {person.photoUrl ? (
+            <img src={person.photoUrl} alt={person.name}
+              style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', marginBottom: 8, border: `2px solid ${accent}` }} />
+          ) : (
+            <div style={{ fontSize: 24, marginBottom: 4 }}>{isFemale ? '👩🏾' : '👨🏾'}</div>
+          )}
           <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 15, color: accent }}>
             {person.name}
           </div>
