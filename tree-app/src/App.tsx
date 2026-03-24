@@ -155,6 +155,31 @@ export default function App() {
   svgWRef.current = svgW;
   svgHRef.current = svgH;
 
+  // ── Compute a readable initial viewBox centered on the tree ─────────────────
+  // Scales so nodes are at least MIN_NODE_PX wide on screen, fits tree if smaller.
+  function computeReadableVb() {
+    const el = svgRef.current;
+    const cw = el?.clientWidth  || 800;
+    const ch = el?.clientHeight || 400;
+    const MIN_NODE_PX = 70;
+    const fitScale   = Math.min(cw / svgW, ch / svgH);
+    const scale      = Math.max(fitScale, MIN_NODE_PX / NW);
+    const vbW = cw / scale;
+    const vbH = ch / scale;
+    const xs = Object.values(pos).map(p => p.x);
+    const ys = Object.values(pos).map(p => p.y);
+    const cx = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : svgW / 2;
+    const cy = ys.length ? (Math.min(...ys) + Math.max(...ys)) / 2 : svgH / 2;
+    return { x: cx - vbW / 2, y: cy - vbH / 2, w: vbW, h: vbH };
+  }
+
+  // Set readable initial viewBox once data is loaded
+  useEffect(() => {
+    if (loading || !svgRef.current || !Object.keys(pos).length) return;
+    setVb(computeReadableVb());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   // ── Non-passive wheel listener for zoom ─────────────────────────────────────
   useEffect(() => {
     const el = svgRef.current;
@@ -167,8 +192,8 @@ export default function App() {
       const mx = cur.x + (e.clientX - rect.left) / rect.width * cur.w;
       const my = cur.y + (e.clientY - rect.top) / rect.height * cur.h;
       const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-      const newW = Math.max(300, Math.min(svgWRef.current * 3, cur.w * factor));
-      const newH = Math.max(200, Math.min(svgHRef.current * 3, cur.h * factor));
+      const newW = Math.max(300, Math.min(svgWRef.current, cur.w * factor));
+      const newH = Math.max(200, Math.min(svgHRef.current, cur.h * factor));
       setVb({
         x: mx - (mx - cur.x) / cur.w * newW,
         y: my - (my - cur.y) / cur.h * newH,
@@ -205,7 +230,13 @@ export default function App() {
   function centerOn(id: number) {
     const p = pos[id];
     if (!p) return;
-    const w = svgW * 0.35, h = svgH * 0.35;
+    const el = svgRef.current;
+    const cw = el?.clientWidth  || 800;
+    const ch = el?.clientHeight || 400;
+    // Zoom in to ~2× the readable scale so the target node is prominent
+    const scale = (90 / NW) * 2;
+    const w = cw / scale;
+    const h = ch / scale;
     setVb({ x: p.x - w / 2, y: p.y - h / 2, w, h });
   }
   function stepSearch(dir: 1 | -1) {
@@ -291,7 +322,7 @@ export default function App() {
             type="text"
             placeholder="Search name…"
             value={searchQuery}
-            onChange={e => { const q = e.target.value; setSearchQuery(q); setSearchIdx(0); if (q.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(q.trim().toLowerCase()))).map(p => p.id); if (hits.length) centerOn(hits[0]); } else { setVb(null); } }}
+            onChange={e => { const q = e.target.value; setSearchQuery(q); setSearchIdx(0); if (q.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(q.trim().toLowerCase()))).map(p => p.id); if (hits.length) centerOn(hits[0]); } else { setVb(computeReadableVb()); } }}
             style={styles.searchInput}
           />
           {searchHits.length > 0 && (
@@ -301,9 +332,7 @@ export default function App() {
               <button onClick={() => stepSearch(1)} style={styles.searchBtn}>›</button>
             </>
           )}
-          {vb && (
-            <button onClick={() => { setVb(null); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
-          )}
+          <button onClick={() => { setVb(computeReadableVb()); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
         </div>
         {/* Suggest + button */}
         <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
