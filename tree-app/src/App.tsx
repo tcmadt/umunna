@@ -628,6 +628,7 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   const [addGender, setAddGender] = useState<'m' | 'f'>('m');
   const [addConnectedTo, setAddConnectedTo] = useState('');
   const [addRelType, setAddRelType] = useState<'child of' | 'parent of' | 'spouse of'>('child of');
+  const [addSecondParent, setAddSecondParent] = useState('');
   const [addBirthYear, setAddBirthYear] = useState('');
   const [addPlaceOfBirth, setAddPlaceOfBirth] = useState('');
   const [addCurrentLocation, setAddCurrentLocation] = useState('');
@@ -668,6 +669,8 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
     if (connectedId !== null) {
       if (addRelType === 'child of') {
         pIds = [connectedId];
+        const secondId = resolvePersonId(addSecondParent);
+        if (secondId !== null) pIds.push(secondId);
       } else if (addRelType === 'spouse of') {
         sIds = [connectedId];
       } else if (addRelType === 'parent of') {
@@ -776,6 +779,12 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                     <option value="spouse of">spouse of</option>
                   </select>
                 </ModalField>
+                {addRelType === 'child of' && (
+                  <ModalField label="Second parent (optional)">
+                    <input value={addSecondParent} onChange={e => setAddSecondParent(e.target.value)}
+                      list="people-list" style={styles.modalInput} placeholder="Name or ID" />
+                  </ModalField>
+                )}
                 <ModalField label="Birth year">
                   <input value={addBirthYear} onChange={e => setAddBirthYear(e.target.value)} style={styles.modalInput} placeholder="e.g. 1965" />
                 </ModalField>
