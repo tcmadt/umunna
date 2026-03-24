@@ -90,8 +90,8 @@ Additional D3 globals:
 - `#tree-search` — search input in header
 
 ## Google Sheets (data source)
-Sheet name: `Sheet1`
-Columns: `ID | Name | Parent ID | Spouse ID | Place/Notes | Sex | Year of Birth | Year of Death | Place of Birth | Current Location`
+Sheet name: `Main`
+Columns: `ID | Name | Parent IDs | Spouse IDs | Place/Notes | Sex | Year of Birth | Year of Death | Place of Birth | Current Location | Photo URL`
 Submissions sheet columns: `Timestamp | Type | Summary | From | Notes | Status`
 
 ## Apps Script endpoint
