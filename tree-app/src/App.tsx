@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useSheetData } from './useSheetData';
 import {
   deriveUnions, assignGens, computeLayout, getPaths,
@@ -21,7 +21,16 @@ export default function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchIdx, setSearchIdx] = useState(0);
-  const [focusedViewBox, setFocusedViewBox] = useState<string | null>(null);
+  // Pan/zoom state — null means "show full tree"
+  const [vb, setVb] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [dragStart, setDragStart] = useState<{ mx: number; my: number; vx: number; vy: number } | null>(null);
+  const didDragRef = useRef(false);
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Refs so the wheel handler (attached once) always sees fresh values
+  const vbRef = useRef(vb);
+  const svgWRef = useRef(800);
+  const svgHRef = useRef(400);
+  vbRef.current = vb;
 
   const { unions, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
@@ -130,6 +139,35 @@ export default function App() {
     return result;
   }, [hiddenByDefault, selected, unions]);
 
+  // Keep dimension refs in sync for wheel handler
+  svgWRef.current = svgW;
+  svgHRef.current = svgH;
+
+  // ── Non-passive wheel listener for zoom ─────────────────────────────────────
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cur = vbRef.current ?? { x: 0, y: 0, w: svgWRef.current, h: svgHRef.current };
+      // Mouse position in SVG coordinate space
+      const mx = cur.x + (e.clientX - rect.left) / rect.width * cur.w;
+      const my = cur.y + (e.clientY - rect.top) / rect.height * cur.h;
+      const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      const newW = Math.max(300, Math.min(svgWRef.current * 3, cur.w * factor));
+      const newH = Math.max(200, Math.min(svgHRef.current * 3, cur.h * factor));
+      setVb({
+        x: mx - (mx - cur.x) / cur.w * newW,
+        y: my - (my - cur.y) / cur.h * newH,
+        w: newW,
+        h: newH,
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   // ── Search ──────────────────────────────────────────────────────────────────
   const searchHits = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -140,11 +178,11 @@ export default function App() {
     ).map(p => p.id);
   }, [searchQuery, people]);
 
-  const VB_W = 500, VB_H = 320;
   function centerOn(id: number) {
     const p = pos[id];
     if (!p) return;
-    setFocusedViewBox(`${p.x - VB_W / 2} ${p.y - VB_H / 2} ${VB_W} ${VB_H}`);
+    const w = svgW * 0.35, h = svgH * 0.35;
+    setVb({ x: p.x - w / 2, y: p.y - h / 2, w, h });
   }
   function stepSearch(dir: 1 | -1) {
     if (!searchHits.length) return;
@@ -152,6 +190,28 @@ export default function App() {
     setSearchIdx(next);
     centerOn(searchHits[next]);
   }
+
+  // ── Pan handlers ────────────────────────────────────────────────────────────
+  function onSvgMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+    didDragRef.current = false;
+    const cur = vbRef.current ?? { x: 0, y: 0, w: svgWRef.current, h: svgHRef.current };
+    setDragStart({ mx: e.clientX, my: e.clientY, vx: cur.x, vy: cur.y });
+  }
+  function onSvgMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!dragStart) return;
+    const dx = e.clientX - dragStart.mx;
+    const dy = e.clientY - dragStart.my;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDragRef.current = true;
+    if (!didDragRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cur = vbRef.current ?? { x: 0, y: 0, w: svgWRef.current, h: svgHRef.current };
+    setVb({
+      ...cur,
+      x: dragStart.vx - dx * (cur.w / rect.width),
+      y: dragStart.vy - dy * (cur.h / rect.height),
+    });
+  }
+  function onSvgMouseUp() { setDragStart(null); }
 
   if (loading) return (
     <div style={styles.page}>
@@ -182,7 +242,7 @@ export default function App() {
             type="text"
             placeholder="Search name…"
             value={searchQuery}
-            onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0); if (e.target.value.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(e.target.value.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(e.target.value.trim().toLowerCase()))).map(p => p.id); if (hits.length) { const p = pos[hits[0]]; if (p) setFocusedViewBox(`${p.x - VB_W/2} ${p.y - VB_H/2} ${VB_W} ${VB_H}`); } } else { setFocusedViewBox(null); } }}
+            onChange={e => { const q = e.target.value; setSearchQuery(q); setSearchIdx(0); if (q.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(q.trim().toLowerCase()))).map(p => p.id); if (hits.length) centerOn(hits[0]); } else { setVb(null); } }}
             style={styles.searchInput}
           />
           {searchHits.length > 0 && (
@@ -192,8 +252,8 @@ export default function App() {
               <button onClick={() => stepSearch(1)} style={styles.searchBtn}>›</button>
             </>
           )}
-          {focusedViewBox && (
-            <button onClick={() => { setFocusedViewBox(null); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
+          {vb && (
+            <button onClick={() => { setVb(null); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
           )}
         </div>
       </div>
@@ -201,11 +261,16 @@ export default function App() {
       {/* Tree card — fills remaining height */}
       <div style={styles.card}>
         <svg
-          viewBox={focusedViewBox ?? `0 0 ${svgW} ${svgH}`}
+          ref={svgRef}
+          viewBox={vb ? `${vb.x} ${vb.y} ${vb.w} ${vb.h}` : `0 0 ${svgW} ${svgH}`}
           width="100%"
           height="100%"
           preserveAspectRatio="xMidYMid meet"
-          style={{ display: 'block', transition: 'all 0.5s ease' }}
+          style={{ display: 'block', cursor: dragStart ? 'grabbing' : 'grab', userSelect: 'none' }}
+          onMouseDown={onSvgMouseDown}
+          onMouseMove={onSvgMouseMove}
+          onMouseUp={onSvgMouseUp}
+          onMouseLeave={onSvgMouseUp}
         >
           {/* Lane banding */}
           {lanes.map((lane, i) => (
@@ -289,7 +354,7 @@ export default function App() {
               <g key={person.id} style={{ cursor: 'pointer' }}
                 onMouseEnter={() => setHoveredPerson(person.id)}
                 onMouseLeave={() => setHoveredPerson(null)}
-                onClick={() => setSelected(isSelected ? null : person.id)}
+                onClick={() => { if (didDragRef.current) return; setSelected(isSelected ? null : person.id); }}
               >
                 <rect x={p.x - NW / 2} y={p.y - NH / 2} width={NW} height={NH} rx={5}
                   fill={fill}
