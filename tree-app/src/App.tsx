@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { useSheetData } from './useSheetData';
+import { useSheetData, ENDPOINT_URL } from './useSheetData';
 import {
   deriveUnions, assignGens, computeLayout, getPaths,
   getAncestors, getDescendants,
@@ -24,6 +24,10 @@ export default function App() {
   const svgWRef = useRef(800);
   const svgHRef = useRef(400);
   vbRef.current = vb;
+
+  // Phase D state
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [historianMode, setHistorianMode] = useState(false);
 
   const { unions, gens, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
@@ -176,6 +180,18 @@ export default function App() {
     return () => el.removeEventListener('wheel', onWheel);
   }, [loading]);
 
+  // ── Historian mode keyboard shortcut ────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'H' && e.shiftKey) {
+        const code = window.prompt('Historian passcode:');
+        if (code === 'Umunna5600.') setHistorianMode(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // ── Search ──────────────────────────────────────────────────────────────────
   const searchHits = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -221,6 +237,31 @@ export default function App() {
   }
   function onSvgMouseUp() { setDragStart(null); }
 
+  // ── Historian approve/reject ─────────────────────────────────────────────────
+  async function handleApprove(pendingId: string) {
+    try {
+      await fetch(ENDPOINT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'approve', pendingId }),
+      });
+      window.location.reload();
+    } catch {
+      alert('Failed to approve. Please try again.');
+    }
+  }
+  async function handleReject(pendingId: string) {
+    if (!window.confirm('Reject this suggestion?')) return;
+    try {
+      await fetch(ENDPOINT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'reject', pendingId }),
+      });
+      window.location.reload();
+    } catch {
+      alert('Failed to reject. Please try again.');
+    }
+  }
+
   if (loading) return (
     <div style={styles.page}>
       <div style={{ color: '#8A7060', fontSize: 13, letterSpacing: 2 }}>Loading family data…</div>
@@ -264,6 +305,15 @@ export default function App() {
             <button onClick={() => { setVb(null); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
           )}
         </div>
+        {/* Suggest + button */}
+        <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
+        {/* Historian badge */}
+        {historianMode && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#2a1a04', border: '1px solid #D08A25', borderRadius: 4, padding: '3px 10px' }}>
+            <span style={{ color: '#D08A25', fontSize: 10, letterSpacing: 1.5 }}>HISTORIAN</span>
+            <button onClick={() => setHistorianMode(false)} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
+          </div>
+        )}
       </div>
 
       {/* Tree card — fills remaining height */}
@@ -319,6 +369,9 @@ export default function App() {
             const isFemale = person.g === 'f';
             const isSelected = person.id === selected;
 
+            const isPending = !!person.pending;
+            const hasPendingEdit = !!person.pendingEdit;
+
             // Base warm earthy colors
             let fill   = isFemale ? '#160D05' : '#1C0E06';
             let stroke = isFemale ? '#D08A25' : '#B85E28';
@@ -326,11 +379,18 @@ export default function App() {
             let nodeOpacity = 1;
             let sw = isSelected ? 2.5 : 1;
 
+            // Pending nodes get muted styling
+            if (isPending) {
+              fill = '#1a0f06';
+              stroke = '#6b4c2a';
+              txtClr = '#8A7060';
+            }
+
             // Search hit glow (overrides dimming but not hover/bloodline)
             const isSearchHit = searchHits.includes(person.id);
             const isCurrentHit = searchHits[searchIdx] === person.id;
 
-            if (highlight) {
+            if (!isPending && highlight) {
               if (highlight.mode === 'hover') {
                 if (person.id === highlight.id) {
                   stroke = '#F0E8D8'; sw = 3;
@@ -368,6 +428,7 @@ export default function App() {
                   fill={fill}
                   stroke={isCurrentHit ? '#F0E8D8' : isSearchHit ? '#E8BF60' : stroke}
                   strokeWidth={isCurrentHit ? 3 : isSearchHit ? 2 : sw}
+                  strokeDasharray={isPending ? '4,3' : 'none'}
                   opacity={nodeOpacity}
                   style={{ transition: 'all 0.2s' }} />
                 {person.photoUrl ? (
@@ -397,6 +458,18 @@ export default function App() {
                     {person.name.split(' ')[0]}
                   </text>
                 )}
+                {/* Pending "?" badge */}
+                {isPending && (
+                  <text x={p.x + NW / 2 - 6} y={p.y - NH / 2 + 8} fontSize={8} fill="#6b4c2a"
+                    textAnchor="middle" dominantBaseline="middle"
+                    style={{ pointerEvents: 'none' }}>?</text>
+                )}
+                {/* Pending edit orange dot */}
+                {hasPendingEdit && !isPending && (
+                  <circle cx={p.x + NW / 2 - 5} cy={p.y - NH / 2 + 5} r={4}
+                    fill="#D08A25" opacity={0.9}
+                    style={{ pointerEvents: 'none' }} />
+                )}
               </g>
             );
           })}
@@ -406,22 +479,45 @@ export default function App() {
 
       {/* Info panel */}
       {selectedPerson && (
-        <InfoPanel person={selectedPerson} people={people} onClose={() => setSelected(null)} />
+        <InfoPanel
+          person={selectedPerson}
+          people={people}
+          onClose={() => setSelected(null)}
+          historianMode={historianMode}
+          onApprove={handleApprove}
+          onReject={handleReject}
+        />
+      )}
+
+      {/* Suggest modal */}
+      {showSuggest && (
+        <SuggestModal people={people} onClose={() => setShowSuggest(false)} />
       )}
     </div>
   );
 }
 
-function InfoPanel({ person, people, onClose }: {
+// ── InfoPanel ────────────────────────────────────────────────────────────────
+
+function InfoPanel({ person, people, onClose, historianMode, onApprove, onReject }: {
   person: Person;
   people: Record<number, Person>;
   onClose: () => void;
+  historianMode: boolean;
+  onApprove: (pendingId: string) => void;
+  onReject: (pendingId: string) => void;
 }) {
   const isFemale = person.g === 'f';
   const accent = isFemale ? '#D08A25' : '#B85E28';
   const parents  = person.pIds.map(id => people[id]).filter(Boolean) as Person[];
   const spouses  = person.sIds.map(id => people[id]).filter(Boolean) as Person[];
   const children = Object.values(people).filter(p => p.pIds.includes(person.id));
+
+  const FIELD_LABELS: Record<string, string> = {
+    name: 'Name', sex: 'Gender', birthYear: 'Birth Year', deathYear: 'Death Year',
+    placeOfBirth: 'Place of Birth', currentLocation: 'Current Location',
+    photoUrl: 'Photo URL', notes: 'Notes',
+  };
 
   return (
     <div style={styles.panel}>
@@ -441,6 +537,17 @@ function InfoPanel({ person, people, onClose }: {
               "{person.nicks.join(', ')}"
             </div>
           )}
+          {/* Pending suggestion label */}
+          {person.pending && (
+            <div style={{ fontSize: 10, color: '#D08A25', letterSpacing: 1.2, marginTop: 4, textTransform: 'uppercase' }}>
+              Pending Suggestion
+            </div>
+          )}
+          {person.submittedBy && (
+            <div style={{ fontSize: 10, color: '#6b4c2a', marginTop: 2 }}>
+              Suggested by: {person.submittedBy}
+            </div>
+          )}
         </div>
         <button onClick={onClose} style={styles.closeBtn}>✕</button>
       </div>
@@ -453,10 +560,50 @@ function InfoPanel({ person, people, onClose }: {
         {parents.length > 0 && <PanelSection label="Parents" items={parents} accent={accent} />}
         {spouses.length > 0 && <PanelSection label={spouses.length > 1 ? 'Spouses' : 'Spouse'} items={spouses} accent={accent} />}
         {children.length > 0 && <PanelSection label="Children" items={children} accent={accent} />}
+
+        {/* Historian actions for pending new person */}
+        {historianMode && person.pending && person.pendingId && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button
+              onClick={() => { if (window.confirm('Approve and add to tree?')) onApprove(person.pendingId!); }}
+              style={styles.approveBtn}>✓ Approve</button>
+            <button onClick={() => onReject(person.pendingId!)} style={styles.rejectBtn}>✕ Reject</button>
+          </div>
+        )}
+
+        {/* Pending edit section */}
+        {person.pendingEdit && (
+          <div style={{ marginTop: 16, borderTop: '1px solid #2a1408', paddingTop: 12 }}>
+            <div style={{ fontSize: 9, letterSpacing: 1.5, color: '#D08A25', textTransform: 'uppercase', marginBottom: 8 }}>
+              Edit Suggested
+            </div>
+            {Object.entries(person.pendingEdit.fields).map(([key, val]) => (
+              <div key={key} style={{ fontSize: 11, color: '#8A7060', marginBottom: 4 }}>
+                <span style={{ color: '#6b4c2a', marginRight: 6 }}>{FIELD_LABELS[key] ?? key}:</span>
+                {val}
+              </div>
+            ))}
+            {person.pendingEdit.submittedBy && (
+              <div style={{ fontSize: 10, color: '#6b4c2a', marginTop: 4 }}>
+                Suggested by: {person.pendingEdit.submittedBy}
+              </div>
+            )}
+            {historianMode && person.pendingEdit.pendingId && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button
+                  onClick={() => { if (window.confirm('Approve this edit?')) onApprove(person.pendingEdit!.pendingId); }}
+                  style={styles.approveBtn}>✓ Approve Edit</button>
+                <button onClick={() => onReject(person.pendingEdit!.pendingId)} style={styles.rejectBtn}>✕ Reject</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+// ── PanelSection ─────────────────────────────────────────────────────────────
 
 function PanelSection({ label, items, accent }: { label: string; items: Person[]; accent: string }) {
   return (
@@ -470,6 +617,259 @@ function PanelSection({ label, items, accent }: { label: string; items: Person[]
     </div>
   );
 }
+
+// ── SuggestModal ──────────────────────────────────────────────────────────────
+
+function SuggestModal({ people, onClose }: { people: Record<number, Person>; onClose: () => void }) {
+  const [tab, setTab] = useState<'add' | 'edit'>('add');
+
+  // Add Person form
+  const [addName, setAddName] = useState('');
+  const [addGender, setAddGender] = useState<'m' | 'f'>('m');
+  const [addConnectedTo, setAddConnectedTo] = useState('');
+  const [addRelType, setAddRelType] = useState<'child of' | 'parent of' | 'spouse of'>('child of');
+  const [addBirthYear, setAddBirthYear] = useState('');
+  const [addPlaceOfBirth, setAddPlaceOfBirth] = useState('');
+  const [addCurrentLocation, setAddCurrentLocation] = useState('');
+  const [addNotes, setAddNotes] = useState('');
+  const [addPhotoUrl, setAddPhotoUrl] = useState('');
+  const [addSubmittedBy, setAddSubmittedBy] = useState('');
+  const [addStatus, setAddStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+
+  // Edit Person form
+  const [editTarget, setEditTarget] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editBirthYear, setEditBirthYear] = useState('');
+  const [editDeathYear, setEditDeathYear] = useState('');
+  const [editPlaceOfBirth, setEditPlaceOfBirth] = useState('');
+  const [editCurrentLocation, setEditCurrentLocation] = useState('');
+  const [editPhotoUrl, setEditPhotoUrl] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editSubmittedBy, setEditSubmittedBy] = useState('');
+  const [editStatus, setEditStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+
+  const peopleList = Object.values(people).sort((a, b) => a.name.localeCompare(b.name));
+
+  function resolvePersonId(nameOrId: string): number | null {
+    const trimmed = nameOrId.trim();
+    const byId = people[Number(trimmed)];
+    if (byId) return byId.id;
+    const byName = peopleList.find(p => p.name.toLowerCase() === trimmed.toLowerCase());
+    return byName ? byName.id : null;
+  }
+
+  async function submitAdd() {
+    if (!addName.trim()) { alert('Name is required.'); return; }
+    setAddStatus('sending');
+    const connectedId = resolvePersonId(addConnectedTo);
+    let pIds: number[] = [];
+    let sIds: number[] = [];
+    let fullNotes = addNotes;
+    if (connectedId !== null) {
+      if (addRelType === 'child of') {
+        pIds = [connectedId];
+      } else if (addRelType === 'spouse of') {
+        sIds = [connectedId];
+      } else if (addRelType === 'parent of') {
+        fullNotes = `[Parent of ID ${connectedId}]${fullNotes ? ' ' + fullNotes : ''}`;
+      }
+    }
+    try {
+      await fetch(ENDPOINT_URL, {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'suggest-new',
+          name: addName.trim(),
+          sex: addGender === 'f' ? 'F' : 'M',
+          pIds,
+          sIds,
+          birthYear: addBirthYear,
+          placeOfBirth: addPlaceOfBirth,
+          currentLocation: addCurrentLocation,
+          notes: fullNotes,
+          photoUrl: addPhotoUrl,
+          submittedBy: addSubmittedBy,
+        }),
+      });
+      setAddStatus('done');
+    } catch {
+      setAddStatus('error');
+    }
+  }
+
+  async function submitEdit() {
+    const targetId = resolvePersonId(editTarget);
+    if (targetId === null) { alert('Could not find that person. Try using their full name or ID.'); return; }
+    const fields: Record<string, string> = {};
+    if (editName.trim()) fields.name = editName.trim();
+    if (editBirthYear.trim()) fields.birthYear = editBirthYear.trim();
+    if (editDeathYear.trim()) fields.deathYear = editDeathYear.trim();
+    if (editPlaceOfBirth.trim()) fields.placeOfBirth = editPlaceOfBirth.trim();
+    if (editCurrentLocation.trim()) fields.currentLocation = editCurrentLocation.trim();
+    if (editPhotoUrl.trim()) fields.photoUrl = editPhotoUrl.trim();
+    if (editNotes.trim()) fields.notes = editNotes.trim();
+    if (Object.keys(fields).length === 0) { alert('No changes entered.'); return; }
+    setEditStatus('sending');
+    try {
+      await fetch(ENDPOINT_URL, {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'suggest-edit',
+          targetId,
+          fields,
+          submittedBy: editSubmittedBy,
+        }),
+      });
+      setEditStatus('done');
+    } catch {
+      setEditStatus('error');
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#160D05', border: '1px solid #3A1E0C', borderRadius: 8, width: 420, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Modal header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid #3A1E0C' }}>
+          <span style={{ color: '#F0E8D8', fontSize: 13, fontFamily: "'Fraunces', Georgia, serif", letterSpacing: 2 }}>SUGGEST A CHANGE</span>
+          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+        </div>
+        {/* Tabs */}
+        <div style={{ display: 'flex', borderBottom: '1px solid #3A1E0C' }}>
+          {(['add', 'edit'] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              flex: 1, background: 'none', border: 'none', padding: '10px 0',
+              color: tab === t ? '#D08A25' : '#6b4c2a', cursor: 'pointer',
+              fontSize: 11, letterSpacing: 1, fontFamily: "'Outfit', sans-serif",
+              borderBottom: tab === t ? '2px solid #D08A25' : '2px solid transparent',
+            }}>
+              {t === 'add' ? 'Add Person' : 'Edit Person'}
+            </button>
+          ))}
+        </div>
+        {/* Body */}
+        <div style={{ overflowY: 'auto', padding: '16px 18px', flex: 1 }}>
+          {tab === 'add' && (
+            addStatus === 'done' ? (
+              <div style={{ color: '#52A86E', fontSize: 12, textAlign: 'center', padding: '20px 0' }}>
+                Suggestion submitted! A historian will review it.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <ModalField label="Full name *">
+                  <input value={addName} onChange={e => setAddName(e.target.value)} style={styles.modalInput} placeholder="e.g. Chukwuemeka Obi" />
+                </ModalField>
+                <ModalField label="Gender">
+                  <select value={addGender} onChange={e => setAddGender(e.target.value as 'm' | 'f')} style={styles.modalInput}>
+                    <option value="m">Male</option>
+                    <option value="f">Female</option>
+                  </select>
+                </ModalField>
+                <ModalField label="Connected to">
+                  <input value={addConnectedTo} onChange={e => setAddConnectedTo(e.target.value)}
+                    list="people-list" style={styles.modalInput} placeholder="Name or ID" />
+                </ModalField>
+                <ModalField label="Relationship">
+                  <select value={addRelType} onChange={e => setAddRelType(e.target.value as typeof addRelType)} style={styles.modalInput}>
+                    <option value="child of">child of</option>
+                    <option value="parent of">parent of</option>
+                    <option value="spouse of">spouse of</option>
+                  </select>
+                </ModalField>
+                <ModalField label="Birth year">
+                  <input value={addBirthYear} onChange={e => setAddBirthYear(e.target.value)} style={styles.modalInput} placeholder="e.g. 1965" />
+                </ModalField>
+                <ModalField label="Place of birth">
+                  <input value={addPlaceOfBirth} onChange={e => setAddPlaceOfBirth(e.target.value)} style={styles.modalInput} placeholder="e.g. Enugu, Nigeria" />
+                </ModalField>
+                <ModalField label="Current location">
+                  <input value={addCurrentLocation} onChange={e => setAddCurrentLocation(e.target.value)} style={styles.modalInput} placeholder="e.g. Lagos, Nigeria" />
+                </ModalField>
+                <ModalField label="Notes">
+                  <textarea value={addNotes} onChange={e => setAddNotes(e.target.value)} style={{ ...styles.modalInput, resize: 'vertical', minHeight: 56 }} placeholder="Any additional info…" />
+                </ModalField>
+                <ModalField label="Photo URL">
+                  <input value={addPhotoUrl} onChange={e => setAddPhotoUrl(e.target.value)} style={styles.modalInput} placeholder="https://…" />
+                </ModalField>
+                <ModalField label="Your name (optional)">
+                  <input value={addSubmittedBy} onChange={e => setAddSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
+                </ModalField>
+                {addStatus === 'error' && (
+                  <div style={{ color: '#C05050', fontSize: 11 }}>Something went wrong. Please try again.</div>
+                )}
+                <button onClick={submitAdd} disabled={addStatus === 'sending'} style={{ ...styles.suggestBtn, marginTop: 4, alignSelf: 'flex-end' }}>
+                  {addStatus === 'sending' ? 'Sending…' : 'Submit Suggestion'}
+                </button>
+              </div>
+            )
+          )}
+          {tab === 'edit' && (
+            editStatus === 'done' ? (
+              <div style={{ color: '#52A86E', fontSize: 12, textAlign: 'center', padding: '20px 0' }}>
+                Edit suggestion submitted! A historian will review it.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <ModalField label="Person to edit *">
+                  <input value={editTarget} onChange={e => setEditTarget(e.target.value)}
+                    list="people-list" style={styles.modalInput} placeholder="Name or ID" />
+                </ModalField>
+                <div style={{ fontSize: 10, color: '#6b4c2a', marginBottom: 2 }}>Fill in only the fields you want to change:</div>
+                <ModalField label="Name">
+                  <input value={editName} onChange={e => setEditName(e.target.value)} style={styles.modalInput} placeholder="New name" />
+                </ModalField>
+                <ModalField label="Birth year">
+                  <input value={editBirthYear} onChange={e => setEditBirthYear(e.target.value)} style={styles.modalInput} placeholder="e.g. 1965" />
+                </ModalField>
+                <ModalField label="Death year">
+                  <input value={editDeathYear} onChange={e => setEditDeathYear(e.target.value)} style={styles.modalInput} placeholder="e.g. 2010" />
+                </ModalField>
+                <ModalField label="Place of birth">
+                  <input value={editPlaceOfBirth} onChange={e => setEditPlaceOfBirth(e.target.value)} style={styles.modalInput} placeholder="e.g. Enugu, Nigeria" />
+                </ModalField>
+                <ModalField label="Current location">
+                  <input value={editCurrentLocation} onChange={e => setEditCurrentLocation(e.target.value)} style={styles.modalInput} placeholder="e.g. Lagos" />
+                </ModalField>
+                <ModalField label="Photo URL">
+                  <input value={editPhotoUrl} onChange={e => setEditPhotoUrl(e.target.value)} style={styles.modalInput} placeholder="https://…" />
+                </ModalField>
+                <ModalField label="Notes">
+                  <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)} style={{ ...styles.modalInput, resize: 'vertical', minHeight: 56 }} placeholder="Correction or addition…" />
+                </ModalField>
+                <ModalField label="Your name (optional)">
+                  <input value={editSubmittedBy} onChange={e => setEditSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
+                </ModalField>
+                {editStatus === 'error' && (
+                  <div style={{ color: '#C05050', fontSize: 11 }}>Something went wrong. Please try again.</div>
+                )}
+                <button onClick={submitEdit} disabled={editStatus === 'sending'} style={{ ...styles.suggestBtn, marginTop: 4, alignSelf: 'flex-end' }}>
+                  {editStatus === 'sending' ? 'Sending…' : 'Submit Edit'}
+                </button>
+              </div>
+            )
+          )}
+        </div>
+      </div>
+      {/* Datalist for people search */}
+      <datalist id="people-list">
+        {peopleList.map(p => (
+          <option key={p.id} value={p.name} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+function ModalField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <label style={{ fontSize: 10, color: '#6b4c2a', letterSpacing: 0.8, fontFamily: "'Outfit', sans-serif" }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
@@ -516,5 +916,22 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none', border: '1px solid #3A1E0C', borderRadius: 4,
     color: '#8A7060', cursor: 'pointer', fontSize: 12, padding: '3px 7px',
   },
+  suggestBtn: {
+    background: '#1C0E06', border: '1px solid #D08A25', borderRadius: 4,
+    color: '#D08A25', cursor: 'pointer', fontSize: 11, padding: '4px 10px',
+    fontFamily: "'Outfit', sans-serif", letterSpacing: 0.5,
+  },
+  approveBtn: {
+    background: '#1a3a1a', border: '1px solid #52A86E', borderRadius: 4,
+    color: '#52A86E', cursor: 'pointer', fontSize: 11, padding: '5px 12px',
+  },
+  rejectBtn: {
+    background: '#3a1a1a', border: '1px solid #C05050', borderRadius: 4,
+    color: '#C05050', cursor: 'pointer', fontSize: 11, padding: '5px 12px',
+  },
+  modalInput: {
+    background: '#1C0E06', border: '1px solid #3A1E0C', borderRadius: 4,
+    color: '#F0E8D8', fontSize: 11, padding: '5px 8px', outline: 'none',
+    fontFamily: "'Outfit', sans-serif", width: '100%', boxSizing: 'border-box',
+  },
 };
-

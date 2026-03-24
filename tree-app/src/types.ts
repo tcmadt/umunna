@@ -1,3 +1,9 @@
+export interface PendingEdit {
+  pendingId: string;
+  fields: Partial<Record<string, string>>;
+  submittedBy: string;
+}
+
 export interface Person {
   id: number;
   name: string;
@@ -12,6 +18,11 @@ export interface Person {
   placeOfBirth: string;
   currentLocation: string;
   photoUrl: string;
+  // Pending / suggestion fields
+  pending?: boolean;
+  pendingId?: string;
+  submittedBy?: string;
+  pendingEdit?: PendingEdit;
 }
 
 export interface Union {

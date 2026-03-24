@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import type { PersonMap } from './types';
+import type { PersonMap, PendingEdit } from './types';
 
 const ENDPOINT =
   'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec';
+
+export const ENDPOINT_URL = ENDPOINT;
 
 export function useSheetData(limit = 10) {
   const [people, setPeople] = useState<PersonMap>({});
@@ -19,32 +21,44 @@ export function useSheetData(limit = 10) {
       delete (window as any)[cb];
       document.head.removeChild(script);
 
-      // raw is keyed by string ID; filter to first `limit` numeric IDs
       const all = raw as Record<string, Record<string, unknown>>;
-      // Start from ID 1 — ID 0 is isolated (parents outside loaded range)
-      const ids = Object.keys(all)
+
+      // Confirmed IDs: 1–89999; Pending temp IDs: 90000+
+      const confirmedIds = Object.keys(all)
         .map(Number)
-        .filter(id => id >= 1)
+        .filter(id => id >= 1 && id < 90000)
         .sort((a, b) => a - b)
         .slice(0, limit);
 
+      const pendingIds = Object.keys(all)
+        .map(Number)
+        .filter(id => id >= 90000)
+        .sort((a, b) => a - b);
+
+      const allIds = [...confirmedIds, ...pendingIds];
+
       const result: PersonMap = {};
-      ids.forEach(id => {
+      allIds.forEach(id => {
         const p = all[id];
         result[id] = {
           id,
-          name: String(p.name ?? ''),
-          g: String(p.g ?? 'm').startsWith('f') ? 'f' : 'm',
-          pIds: (p.pIds as number[]) ?? [],
-          sIds: (p.sIds as number[]) ?? [],
-          nicks: (p.nicks as string[]) ?? [],
-          notes: String(p.notes ?? ''),
-          rel: String(p.rel ?? 'distant'),
-          birthYear: String(p.birthYear ?? ''),
-          deathYear: String(p.deathYear ?? ''),
-          placeOfBirth: String(p.placeOfBirth ?? ''),
+          name:            String(p.name ?? ''),
+          g:               String(p.g ?? 'm').startsWith('f') ? 'f' : 'm',
+          pIds:            (p.pIds as number[]) ?? [],
+          sIds:            (p.sIds as number[]) ?? [],
+          nicks:           (p.nicks as string[]) ?? [],
+          notes:           String(p.notes ?? ''),
+          rel:             String(p.rel ?? 'distant'),
+          birthYear:       String(p.birthYear ?? ''),
+          deathYear:       String(p.deathYear ?? ''),
+          placeOfBirth:    String(p.placeOfBirth ?? ''),
           currentLocation: String(p.currentLocation ?? ''),
-          photoUrl: String(p.photoUrl ?? ''),
+          photoUrl:        String(p.photoUrl ?? ''),
+          // Pending fields
+          ...(p.pending    ? { pending: true }                         : {}),
+          ...(p.pendingId  ? { pendingId: String(p.pendingId) }        : {}),
+          ...(p.submittedBy ? { submittedBy: String(p.submittedBy) }   : {}),
+          ...(p.pendingEdit ? { pendingEdit: p.pendingEdit as PendingEdit } : {}),
         };
       });
 
