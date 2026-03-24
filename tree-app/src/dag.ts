@@ -5,80 +5,121 @@ const PALETTE = [
   '#6366f1', '#f59e0b', '#0ea5e9', '#ec4899',
 ];
 
+// ─── DERIVE UNIONS ────────────────────────────────────────────────────────────
+// Creates unions from (a) explicit sIds spouse links and (b) shared pIds.
+// Only unions built from sIds get married=true (marriage bar drawn).
 export function deriveUnions(people: PersonMap): Union[] {
   const ids = new Set(Object.keys(people).map(Number));
   const map = new Map<string, Union>();
   let n = 0;
 
-  function key(a: number[]): string {
+  function sortKey(a: number[]): string {
     return [...a].sort((x, y) => x - y).join(',');
   }
-  function get(spouses: number[]): Union {
-    const k = key(spouses);
+  function getOrCreate(spouses: number[], married: boolean): Union {
+    const k = sortKey(spouses);
     if (!map.has(k)) {
       map.set(k, {
         id: `u${n++}`,
         spouses: [...spouses].sort((a, b) => a - b),
         children: [],
-        color: PALETTE[n % PALETTE.length],
+        color: '',
+        married,
       });
     }
-    return map.get(k)!;
+    const u = map.get(k)!;
+    // Once marked married, stays married
+    if (married) u.married = true;
+    return u;
   }
 
-  // Create a union for every married pair
-  const seen = new Set<string>();
+  // Pass 1: explicit marriage links (sIds)
+  const seenPairs = new Set<string>();
   Object.values(people).forEach(p => {
     (p.sIds ?? []).filter(s => ids.has(s)).forEach(s => {
-      const k = key([p.id, s]);
-      if (!seen.has(k)) { seen.add(k); get([p.id, s]); }
+      const k = sortKey([p.id, s]);
+      if (!seenPairs.has(k)) {
+        seenPairs.add(k);
+        getOrCreate([p.id, s], true);
+      }
     });
   });
 
-  // Attach children to their parents' union
+  // Pass 2: parent pairs from pIds (creates union if not already there)
   Object.values(people).forEach(p => {
     const parents = (p.pIds ?? []).filter(pid => ids.has(pid));
-    if (parents.length) {
-      const u = get(parents);
+    if (parents.length > 0) {
+      const u = getOrCreate(parents, false);
       if (!u.children.includes(p.id)) u.children.push(p.id);
     }
   });
 
-  // Assign colors by index after all unions are known
+  // Assign colors by index
   const all = [...map.values()];
   all.forEach((u, i) => { u.color = PALETTE[i % PALETTE.length]; });
   return all;
 }
 
+// ─── ASSIGN GENERATIONS ───────────────────────────────────────────────────────
+// 1. Roots (no parents in dataset) = gen 0
+// 2. Propagate: child gen = max(parent gens) + 1
+// 3. Normalize: spouses must be in the same generation (take max)
+// 4. Re-propagate after normalization
 export function assignGens(people: PersonMap, unions: Union[]): Record<number, number> {
   const ids = new Set(Object.keys(people).map(Number));
   const gen: Record<number, number> = {};
 
-  // Roots = people with no parents in this set
+  // Step 1: roots
   Object.values(people).forEach(p => {
     if (!(p.pIds ?? []).some(pid => ids.has(pid))) gen[p.id] = 0;
   });
 
+  // Step 2: propagate down
+  function propagate() {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      unions.forEach(u => {
+        const parentGens = u.spouses.map(s => gen[s]).filter(g => g !== undefined) as number[];
+        if (!parentGens.length) return;
+        const childGen = Math.max(...parentGens) + 1;
+        u.children.forEach(c => {
+          if (gen[c] === undefined || gen[c] < childGen) {
+            gen[c] = childGen;
+            changed = true;
+          }
+        });
+      });
+    }
+  }
+  propagate();
+
+  // Default any unassigned
+  Object.values(people).forEach(p => { if (gen[p.id] === undefined) gen[p.id] = 0; });
+
+  // Step 3: normalize spouse generations (take max, iterate until stable)
   let changed = true;
   while (changed) {
     changed = false;
-    unions.forEach(u => {
-      const pg = u.spouses.map(s => gen[s]).filter(g => g !== undefined) as number[];
-      if (!pg.length) return;
-      const childGen = Math.max(...pg) + 1;
-      u.children.forEach(c => {
-        if (gen[c] === undefined || gen[c] < childGen) {
-          gen[c] = childGen;
+    Object.values(people).forEach(p => {
+      (p.sIds ?? []).filter(s => ids.has(s)).forEach(s => {
+        const maxG = Math.max(gen[p.id] ?? 0, gen[s] ?? 0);
+        if (gen[p.id] !== maxG || gen[s] !== maxG) {
+          gen[p.id] = maxG;
+          gen[s] = maxG;
           changed = true;
         }
       });
     });
   }
 
-  Object.values(people).forEach(p => { if (gen[p.id] === undefined) gen[p.id] = 0; });
+  // Step 4: re-propagate after spouse normalization
+  propagate();
+
   return gen;
 }
 
+// ─── LAYOUT ───────────────────────────────────────────────────────────────────
 export interface Pos { x: number; y: number; }
 
 export function computeLayout(
@@ -88,81 +129,118 @@ export function computeLayout(
   NW: number,
   GAPY: number,
 ): Record<number, Pos> {
-  const GAPX = NW + 20;
-  const maxG = Math.max(...Object.values(gens), 0);
-  const byG: number[][] = Array.from({ length: maxG + 1 }, () => []);
-  Object.values(people).forEach(p => byG[gens[p.id]].push(p.id));
-
+  const GAPX = NW + 20; // center-to-center distance between adjacent nodes
   const pos: Record<number, Pos> = {};
+  const placed = new Set<number>();
 
-  for (let g = 0; g <= maxG; g++) {
-    const y = g * GAPY;
-    const seen = new Set<number>();
-    const units: number[][] = [];
-
-    byG[g].forEach(id => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      const sp = (people[id].sIds ?? []).find(
-        s => people[s] && gens[s] === g && !seen.has(s)
-      );
-      if (sp !== undefined) { seen.add(sp); units.push([id, sp]); }
-      else units.push([id]);
-    });
-
-    // Sort units by parent x-midpoint
-    units.sort((a, b) => {
-      const mid = (u: number[]) => {
-        const parents = u.flatMap(id => (people[id].pIds ?? []).filter(pid => pos[pid]));
-        return parents.length
-          ? parents.reduce((s, pid) => s + pos[pid].x, 0) / parents.length
-          : Infinity;
-      };
-      return mid(a) - mid(b);
-    });
-
-    let cur = 0;
-    units.forEach(unit => {
-      const parents = unit.flatMap(id =>
-        (people[id].pIds ?? []).filter(pid => pos[pid])
-      );
-      const ideal = parents.length
-        ? parents.reduce((s, pid) => s + pos[pid].x, 0) / parents.length
-        : cur + ((unit.length - 1) * GAPX) / 2;
-      const sx = Math.max(cur, ideal - ((unit.length - 1) * GAPX) / 2);
-      unit.forEach((id, i) => { pos[id] = { x: sx + i * GAPX, y }; });
-      cur = sx + unit.length * GAPX + GAPX * 0.5;
-    });
+  // Which union (if any) produced this person as a child?
+  function parentUnionOf(uid: number): Union | null {
+    return unions.find(u => u.children.includes(uid)) ?? null;
   }
 
-  // Bottom-up: re-center parents over their children
-  for (let g = maxG - 1; g >= 0; g--) {
-    unions.forEach(u => {
-      const sp = u.spouses.filter(s => gens[s] === g && pos[s]);
-      const ch = u.children.filter(c => gens[c] === g + 1 && pos[c]);
-      if (!sp.length || !ch.length) return;
-      const cMid = (Math.min(...ch.map(c => pos[c].x)) + Math.max(...ch.map(c => pos[c].x))) / 2;
-      const pMid = sp.reduce((s, id) => s + pos[id].x, 0) / sp.length;
-      const dx = Math.round(cMid - pMid);
-      if (Math.abs(dx) < 2) return;
-      sp.forEach(s => { pos[s].x += dx; });
-    });
-    // Push right to fix overlaps
-    const row = byG[g].filter(id => pos[id]).sort((a, b) => pos[a].x - pos[b].x);
-    for (let i = 1; i < row.length; i++) {
-      if (pos[row[i]].x < pos[row[i - 1]].x + GAPX) {
-        pos[row[i]].x = pos[row[i - 1]].x + GAPX;
+  // Child unions of U: unions where at least one spouse is a child of U
+  function childUnionsOf(u: Union): Union[] {
+    return unions.filter(cu => cu !== u && cu.spouses.some(s => u.children.includes(s)));
+  }
+
+  // Children of U who are NOT spouses in any union (leaf people)
+  function singleChildrenOf(u: Union): number[] {
+    return u.children.filter(c => !unions.some(cu => cu.spouses.includes(c)));
+  }
+
+  // Root unions: no spouse of theirs was produced by another union
+  const rootUnions = unions.filter(u => !u.spouses.some(s => parentUnionOf(s) !== null));
+
+  // ── Recursive subtree layout ──────────────────────────────────────────────
+  // Returns the next available x after placing this subtree.
+  function layoutSubtree(u: Union, startX: number): number {
+    const childUs = childUnionsOf(u);
+    const singles = singleChildrenOf(u);
+    const parentGen = Math.max(...u.spouses.map(s => gens[s] ?? 0));
+    const childY = (parentGen + 1) * GAPY;
+
+    // ── No children: leaf union ──
+    if (childUs.length === 0 && singles.length === 0) {
+      placeSpouses(u, startX, parentGen * GAPY);
+      return startX + Math.max(u.spouses.length, 1) * GAPX;
+    }
+
+    // ── Has children: recurse first, then center parents above ──
+    let x = startX;
+
+    childUs.forEach(cu => { x = layoutSubtree(cu, x); });
+
+    singles.forEach(c => {
+      if (!placed.has(c)) {
+        pos[c] = { x, y: childY };
+        placed.add(c);
       }
+      x += GAPX;
+    });
+
+    // Collect all child x-positions to find center
+    const childXs: number[] = [];
+    childUs.forEach(cu => {
+      cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
+    });
+    singles.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
+
+    const centerX = childXs.length
+      ? (Math.min(...childXs) + Math.max(...childXs)) / 2
+      : startX + ((u.spouses.length - 1) * GAPX) / 2;
+
+    placeSpouses(u, centerX - ((u.spouses.length - 1) * GAPX) / 2, parentGen * GAPY);
+
+    // Ensure we return far enough right that next sibling doesn't overlap
+    const rightEdge = centerX + (u.spouses.length / 2) * GAPX + GAPX * 0.5;
+    return Math.max(x, rightEdge);
+  }
+
+  // Place spouses of a union side-by-side starting at x.
+  // Already-placed spouses keep their position; unplaced ones go adjacent.
+  function placeSpouses(u: Union, startX: number, y: number) {
+    const alreadyPlaced = u.spouses.filter(s => placed.has(s));
+    if (alreadyPlaced.length === u.spouses.length) return; // all placed
+
+    if (alreadyPlaced.length === 0) {
+      // Nobody placed yet — lay them out in order
+      u.spouses.forEach((s, i) => {
+        pos[s] = { x: startX + i * GAPX, y };
+        placed.add(s);
+      });
+    } else {
+      // Some already placed — anchor to rightmost placed, put unplaced to the right
+      const anchorX = Math.max(...alreadyPlaced.map(s => pos[s].x));
+      u.spouses.filter(s => !placed.has(s)).forEach((s, i) => {
+        pos[s] = { x: anchorX + (i + 1) * GAPX, y };
+        placed.add(s);
+      });
     }
   }
 
-  // Shift so min x = 0
+  // ── Layout all root unions ──
+  let x = 0;
+  rootUnions.forEach(u => { x = layoutSubtree(u, x); });
+
+  // ── Place any remaining unplaced people (truly isolated) ──
+  Object.values(people).forEach(p => {
+    if (!placed.has(p.id)) {
+      pos[p.id] = { x, y: (gens[p.id] ?? 0) * GAPY };
+      placed.add(p.id);
+      x += GAPX;
+    }
+  });
+
+  // ── Shift so leftmost node has a comfortable margin ──
   const minX = Math.min(...Object.values(pos).map(p => p.x));
-  Object.values(pos).forEach(p => { p.x -= minX; });
+  const PAD = 60;
+  const shift = PAD - minX;
+  if (Math.abs(shift) > 0) Object.values(pos).forEach(p => { p.x += shift; });
 
   return pos;
 }
 
+// ─── PATHS ────────────────────────────────────────────────────────────────────
 export interface PathDef { type: 'marriage' | 'descent'; d: string; }
 
 export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
@@ -174,7 +252,8 @@ export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
   const by = sy[0];
   const bx = (Math.min(...sx) + Math.max(...sx)) / 2;
 
-  if (sx.length >= 2) {
+  // Marriage bar only for explicitly married unions
+  if (u.married && sx.length >= 2) {
     paths.push({ type: 'marriage', d: `M ${Math.min(...sx)},${by} H ${Math.max(...sx)}` });
   }
 
@@ -186,6 +265,7 @@ export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
   const minCx = Math.min(...cx), maxCx = Math.max(...cx);
   const cMid = (minCx + maxCx) / 2;
 
+  // Bezier for long in-law single-child descent
   const isLongInlaw = Math.abs(bx - cMid) > 150 && cx.length === 1;
 
   if (isLongInlaw) {
@@ -205,6 +285,7 @@ export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
   return paths;
 }
 
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 export function personUnionIds(pid: number, unions: Union[]): string[] {
   return unions
     .filter(u => u.spouses.includes(pid) || u.children.includes(pid))

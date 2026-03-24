@@ -21,9 +21,10 @@ export function useSheetData(limit = 10) {
 
       // raw is keyed by string ID; filter to first `limit` numeric IDs
       const all = raw as Record<string, Record<string, unknown>>;
+      // Start from ID 1 — ID 0 is isolated (parents outside loaded range)
       const ids = Object.keys(all)
         .map(Number)
-        .filter(Boolean)
+        .filter(id => id >= 1)
         .sort((a, b) => a - b)
         .slice(0, limit);
 

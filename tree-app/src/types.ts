@@ -18,6 +18,7 @@ export interface Union {
   spouses: number[];
   children: number[];
   color: string;
+  married: boolean; // true only when spouses have explicit sIds to each other
 }
 
 export type PersonMap = Record<number, Person>;
