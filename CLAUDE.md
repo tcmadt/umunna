@@ -120,3 +120,11 @@ Dark earthy aesthetic — mahogany, amber, cream on near-black background.
 - Surgical edits only — do not rewrite unrelated code
 - Preserve all existing function signatures
 - New storage keys follow pattern 'umunna:keyname'
+- Always plan before coding on tasks with more than 3 steps
+
+## Slash commands
+/improve    — Rewrite the last prompt to be more precise and token-efficient
+/plan       — Output a numbered step-by-step plan and wait for approval before touching any code
+/reflect    — Summarize your understanding of what was asked and what exists before proceeding
+/simplify   — Refactor the last change to be more concise without changing behavior
+/minimal    — Reminder: surgical edits only, do not rewrite unrelated code, preserve all signatures

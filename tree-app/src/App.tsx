@@ -8,13 +8,6 @@ import type { Person } from './types';
 
 const NW = 110, NH = 36, GAPY = 160, PAD = 80, TOP_PAD = 60;
 
-const LANE_LABELS = [
-  'GREAT-GRANDPARENTS', 'GREAT-GRANDPARENTS',
-  'GRANDPARENTS', 'GRANDPARENTS',
-  'PARENTS', 'PARENTS',
-  'MAIN GEN.', 'CHILDREN',
-];
-
 export default function App() {
   const { people, loading, error } = useSheetData(Infinity);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
@@ -32,12 +25,12 @@ export default function App() {
   const svgHRef = useRef(400);
   vbRef.current = vb;
 
-  const { unions, pos, svgW, svgH, lanes } = useMemo(() => {
+  const { unions, gens, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
       unions: [], gens: {} as Record<number, number>,
       pos: {} as Record<number, { x: number; y: number }>,
       svgW: 800, svgH: 400,
-      lanes: [] as { g: number; y: number; h: number; label: string }[],
+      lanes: [] as { g: number; y: number; h: number }[],
     };
     if (!Object.keys(people).length) return empty;
 
@@ -56,11 +49,25 @@ export default function App() {
       g,
       y: Math.max(0, g * GAPY - GAPY / 2 + TOP_PAD),
       h: GAPY,
-      label: LANE_LABELS[g] ?? `GEN ${g}`,
     }));
 
     return { unions, gens, pos, svgW, svgH, lanes };
   }, [people]);
+
+  // ── Dynamic lane labels relative to selected node ───────────────────────────
+  function laneLabel(g: number): string {
+    if (selected === null) return '';
+    const diff = g - (gens[selected] ?? 0);
+    if (diff === 0) return '';
+    if (diff === -1) return 'PARENTS';
+    if (diff === -2) return 'GRANDPARENTS';
+    if (diff === -3) return 'GREAT-GRANDPARENTS';
+    if (diff < -3) return 'ANCESTORS';
+    if (diff === 1) return 'CHILDREN';
+    if (diff === 2) return 'GRANDCHILDREN';
+    if (diff === 3) return 'GREAT-GRANDCHILDREN';
+    return 'DESCENDANTS';
+  }
 
   // ── Highlight state ─────────────────────────────────────────────────────────
   // hover: 1-degree neighborhood; bloodline: full ancestor+descendant chain
@@ -279,7 +286,7 @@ export default function App() {
                 fill={i % 2 === 0 ? '#130A02' : '#0E0702'} />
               <text x={10} y={lane.y + 14} fontSize={7.5} fill="#2a1408"
                 fontFamily="'Outfit', sans-serif" letterSpacing={1.5}>
-                {lane.label}
+                {laneLabel(lane.g)}
               </text>
             </g>
           ))}
