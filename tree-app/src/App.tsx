@@ -628,7 +628,7 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   const [addGender, setAddGender] = useState<'m' | 'f'>('m');
   const [addConnectedTo, setAddConnectedTo] = useState('');
   const [addRelType, setAddRelType] = useState<'child of' | 'parent of' | 'spouse of'>('child of');
-  const [addSecondParent, setAddSecondParent] = useState('');
+  const [addSecondParent, setAddSecondParent] = useState(''); // ID string from select
   const [addBirthYear, setAddBirthYear] = useState('');
   const [addPlaceOfBirth, setAddPlaceOfBirth] = useState('');
   const [addCurrentLocation, setAddCurrentLocation] = useState('');
@@ -646,37 +646,30 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   const [editCurrentLocation, setEditCurrentLocation] = useState('');
   const [editPhotoUrl, setEditPhotoUrl] = useState('');
   const [editNotes, setEditNotes] = useState('');
-  const [editParents, setEditParents] = useState('');
-  const [editSpouses, setEditSpouses] = useState('');
+  const [editParent1, setEditParent1] = useState('');
+  const [editParent2, setEditParent2] = useState('');
+  const [editSpouse, setEditSpouse] = useState('');
   const [editSubmittedBy, setEditSubmittedBy] = useState('');
   const [editStatus, setEditStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
 
-  const peopleList = Object.values(people).sort((a, b) => a.name.localeCompare(b.name));
-
-  function resolvePersonId(nameOrId: string): number | null {
-    const trimmed = nameOrId.trim();
-    const byId = people[Number(trimmed)];
-    if (byId) return byId.id;
-    const byName = peopleList.find(p => p.name.toLowerCase() === trimmed.toLowerCase());
-    return byName ? byName.id : null;
-  }
+  const confirmedPeople = Object.values(people).filter(p => !p.pending).sort((a, b) => a.name.localeCompare(b.name));
 
   async function submitAdd() {
     if (!addName.trim()) { alert('Name is required.'); return; }
     setAddStatus('sending');
-    const connectedId = resolvePersonId(addConnectedTo);
+    const connectedId = addConnectedTo ? Number(addConnectedTo) : null;
     let pIds: number[] = [];
     let sIds: number[] = [];
-    let fullNotes = addNotes;
-    if (connectedId !== null) {
+    const fullNotes = addNotes;
+    if (connectedId) {
       if (addRelType === 'child of') {
         pIds = [connectedId];
-        const secondId = resolvePersonId(addSecondParent);
-        if (secondId !== null) pIds.push(secondId);
+        const secondId = addSecondParent ? Number(addSecondParent) : null;
+        if (secondId) pIds.push(secondId);
       } else if (addRelType === 'spouse of') {
         sIds = [connectedId];
       } else if (addRelType === 'parent of') {
-        fullNotes = `[Parent of ID ${connectedId}]${fullNotes ? ' ' + fullNotes : ''}`;
+        pIds = []; // historian will wire up the reverse connection
       }
     }
     try {
@@ -703,8 +696,8 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   }
 
   async function submitEdit() {
-    const targetId = resolvePersonId(editTarget);
-    if (targetId === null) { alert('Could not find that person. Try using their full name or ID.'); return; }
+    const targetId = editTarget ? Number(editTarget) : null;
+    if (!targetId) { alert('Please select a person to edit.'); return; }
     const fields: Record<string, string> = {};
     if (editName.trim()) fields.name = editName.trim();
     if (editBirthYear.trim()) fields.birthYear = editBirthYear.trim();
@@ -713,14 +706,9 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
     if (editCurrentLocation.trim()) fields.currentLocation = editCurrentLocation.trim();
     if (editPhotoUrl.trim()) fields.photoUrl = editPhotoUrl.trim();
     if (editNotes.trim()) fields.notes = editNotes.trim();
-    if (editParents.trim()) {
-      const ids = editParents.split(',').map(s => resolvePersonId(s.trim())).filter((id): id is number => id !== null);
-      if (ids.length) fields.pIds = ids.join(',');
-    }
-    if (editSpouses.trim()) {
-      const ids = editSpouses.split(',').map(s => resolvePersonId(s.trim())).filter((id): id is number => id !== null);
-      if (ids.length) fields.sIds = ids.join(',');
-    }
+    const parentIds = [editParent1, editParent2].map(Number).filter(Boolean);
+    if (parentIds.length) fields.pIds = parentIds.join(',');
+    if (editSpouse) fields.sIds = editSpouse;
     if (Object.keys(fields).length === 0) { alert('No changes entered.'); return; }
     setEditStatus('sending');
     try {
@@ -778,10 +766,6 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                     <option value="f">Female</option>
                   </select>
                 </ModalField>
-                <ModalField label="Connected to">
-                  <input value={addConnectedTo} onChange={e => setAddConnectedTo(e.target.value)}
-                    list="people-list" style={styles.modalInput} placeholder="Name or ID" />
-                </ModalField>
                 <ModalField label="Relationship">
                   <select value={addRelType} onChange={e => setAddRelType(e.target.value as typeof addRelType)} style={styles.modalInput}>
                     <option value="child of">child of</option>
@@ -789,10 +773,18 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                     <option value="spouse of">spouse of</option>
                   </select>
                 </ModalField>
+                <ModalField label={addRelType === 'child of' ? 'Parent 1' : addRelType === 'spouse of' ? 'Spouse' : 'Child of'}>
+                  <select value={addConnectedTo} onChange={e => setAddConnectedTo(e.target.value)} style={styles.modalInput}>
+                    <option value="">— select —</option>
+                    {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                  </select>
+                </ModalField>
                 {addRelType === 'child of' && (
-                  <ModalField label="Second parent (optional)">
-                    <input value={addSecondParent} onChange={e => setAddSecondParent(e.target.value)}
-                      list="people-list" style={styles.modalInput} placeholder="Name or ID" />
+                  <ModalField label="Parent 2 (optional)">
+                    <select value={addSecondParent} onChange={e => setAddSecondParent(e.target.value)} style={styles.modalInput}>
+                      <option value="">— select —</option>
+                      {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                    </select>
                   </ModalField>
                 )}
                 <ModalField label="Birth year">
@@ -830,8 +822,10 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <ModalField label="Person to edit *">
-                  <input value={editTarget} onChange={e => setEditTarget(e.target.value)}
-                    list="people-list" style={styles.modalInput} placeholder="Name or ID" />
+                  <select value={editTarget} onChange={e => setEditTarget(e.target.value)} style={styles.modalInput}>
+                    <option value="">— select —</option>
+                    {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                  </select>
                 </ModalField>
                 <div style={{ fontSize: 10, color: '#6b4c2a', marginBottom: 2 }}>Fill in only the fields you want to change:</div>
                 <ModalField label="Name">
@@ -855,11 +849,23 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                 <ModalField label="Notes">
                   <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)} style={{ ...styles.modalInput, resize: 'vertical', minHeight: 56 }} placeholder="Correction or addition…" />
                 </ModalField>
-                <ModalField label="Parents (comma-separated names or IDs)">
-                  <input value={editParents} onChange={e => setEditParents(e.target.value)} style={styles.modalInput} placeholder="e.g. Chukwu Obi, Ada Obi" />
+                <ModalField label="Parent 1">
+                  <select value={editParent1} onChange={e => setEditParent1(e.target.value)} style={styles.modalInput}>
+                    <option value="">— no change —</option>
+                    {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                  </select>
                 </ModalField>
-                <ModalField label="Spouses (comma-separated names or IDs)">
-                  <input value={editSpouses} onChange={e => setEditSpouses(e.target.value)} style={styles.modalInput} placeholder="e.g. Ngozi Obi" />
+                <ModalField label="Parent 2">
+                  <select value={editParent2} onChange={e => setEditParent2(e.target.value)} style={styles.modalInput}>
+                    <option value="">— no change —</option>
+                    {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                  </select>
+                </ModalField>
+                <ModalField label="Spouse">
+                  <select value={editSpouse} onChange={e => setEditSpouse(e.target.value)} style={styles.modalInput}>
+                    <option value="">— no change —</option>
+                    {confirmedPeople.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+                  </select>
                 </ModalField>
                 <ModalField label="Your name (optional)">
                   <input value={editSubmittedBy} onChange={e => setEditSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
@@ -875,12 +881,6 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
           )}
         </div>
       </div>
-      {/* Datalist for people search */}
-      <datalist id="people-list">
-        {peopleList.map(p => (
-          <option key={p.id} value={p.name} />
-        ))}
-      </datalist>
     </div>
   );
 }
