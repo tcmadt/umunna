@@ -27,8 +27,10 @@ export default function App() {
 
   // Phase D state
   const [showSuggest, setShowSuggest] = useState(false);
-  const [historianMode, setHistorianMode] = useState(false);
+  const [historianMode, setHistorianMode] = useState(() => sessionStorage.getItem('umunna:historian') === '1');
+  const [contributorMode, setContributorMode] = useState(() => sessionStorage.getItem('umunna:contributor') === '1');
   const [isPrinting, setIsPrinting] = useState(false);
+  const isMobile = window.innerWidth < 640;
 
   useEffect(() => {
     if (!isPrinting) return;
@@ -214,12 +216,90 @@ export default function App() {
     return () => el.removeEventListener('wheel', onWheel);
   }, [loading]);
 
-  // ── Historian mode keyboard shortcut ────────────────────────────────────────
+  // ── Touch pan + pinch zoom ───────────────────────────────────────────────────
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    let lastTouches: React.Touch[] | Touch[] = [];
+
+    const onTouchStart = (e: TouchEvent) => {
+      didDragRef.current = false;
+      lastTouches = Array.from(e.touches);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const touches = Array.from(e.touches);
+      const cur = vbRef.current ?? { x: 0, y: 0, w: svgWRef.current, h: svgHRef.current };
+      const rect = el.getBoundingClientRect();
+
+      if (touches.length === 1 && lastTouches.length === 1) {
+        // Single finger pan
+        const dx = touches[0].clientX - lastTouches[0].clientX;
+        const dy = touches[0].clientY - lastTouches[0].clientY;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDragRef.current = true;
+        setVb({
+          ...cur,
+          x: cur.x - dx * (cur.w / rect.width),
+          y: cur.y - dy * (cur.h / rect.height),
+        });
+      } else if (touches.length === 2 && lastTouches.length === 2) {
+        // Two-finger pinch zoom
+        const prevDist = Math.hypot(
+          lastTouches[1].clientX - lastTouches[0].clientX,
+          lastTouches[1].clientY - lastTouches[0].clientY,
+        );
+        const newDist = Math.hypot(
+          touches[1].clientX - touches[0].clientX,
+          touches[1].clientY - touches[0].clientY,
+        );
+        if (prevDist === 0) { lastTouches = touches; return; }
+        const factor = prevDist / newDist;
+        // Zoom toward midpoint of the two fingers
+        const midX = (touches[0].clientX + touches[1].clientX) / 2;
+        const midY = (touches[0].clientY + touches[1].clientY) / 2;
+        const mx = cur.x + (midX - rect.left) / rect.width * cur.w;
+        const my = cur.y + (midY - rect.top) / rect.height * cur.h;
+        const newW = Math.max(300, Math.min(svgWRef.current, cur.w * factor));
+        const newH = Math.max(200, Math.min(svgHRef.current, cur.h * factor));
+        setVb({
+          x: mx - (mx - cur.x) / cur.w * newW,
+          y: my - (my - cur.y) / cur.h * newH,
+          w: newW, h: newH,
+        });
+        didDragRef.current = true;
+      }
+      lastTouches = touches;
+    };
+    const onTouchEnd = () => { lastTouches = []; };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [loading]);
+
+  // ── Role keyboard shortcuts ──────────────────────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'H' && e.shiftKey) {
         const code = window.prompt('Historian passcode:');
-        if (code === 'Umunna5600.') setHistorianMode(true);
+        if (code === 'Umunna5600.') {
+          setHistorianMode(true);
+          setContributorMode(true);
+          sessionStorage.setItem('umunna:historian', '1');
+          sessionStorage.setItem('umunna:contributor', '1');
+        }
+      }
+      if (e.key === 'C' && e.shiftKey) {
+        const code = window.prompt('Contributor passcode:');
+        if (code === 'Owerre5600.') {
+          setContributorMode(true);
+          sessionStorage.setItem('umunna:contributor', '1');
+        }
       }
     }
     window.addEventListener('keydown', onKey);
@@ -353,15 +433,25 @@ export default function App() {
           )}
           <button onClick={() => { setVb(computeReadableVb()); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
         </div>
-        {/* Suggest + button */}
-        <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
-        {/* PDF export button */}
-        <button onClick={() => setIsPrinting(true)} style={styles.searchBtn} title="Export PDF">⬇ PDF</button>
-        {/* Historian badge */}
+        {/* Suggest + button — contributors and historians only */}
+        {(contributorMode || historianMode) && (
+          <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
+        )}
+        {/* PDF export button — desktop only */}
+        {!isMobile && (
+          <button onClick={() => setIsPrinting(true)} style={styles.searchBtn} title="Export PDF">⬇ PDF</button>
+        )}
+        {/* Role badges */}
         {historianMode && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#2a1a04', border: '1px solid #D08A25', borderRadius: 4, padding: '3px 10px' }}>
             <span style={{ color: '#D08A25', fontSize: 10, letterSpacing: 1.5 }}>HISTORIAN</span>
-            <button onClick={() => setHistorianMode(false)} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
+            <button onClick={() => { setHistorianMode(false); sessionStorage.removeItem('umunna:historian'); }} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
+          </div>
+        )}
+        {contributorMode && !historianMode && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1a1a04', border: '1px solid #52A86E', borderRadius: 4, padding: '3px 10px' }}>
+            <span style={{ color: '#52A86E', fontSize: 10, letterSpacing: 1.5 }}>CONTRIBUTOR</span>
+            <button onClick={() => { setContributorMode(false); sessionStorage.removeItem('umunna:contributor'); }} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
           </div>
         )}
       </div>}
@@ -988,7 +1078,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   panel: {
     position: 'fixed', right: 0, top: 0, bottom: 0,
-    width: 280, background: '#160D05',
+    width: Math.min(280, window.innerWidth),
+    background: '#160D05',
     borderLeft: '1px solid #3A1E0C',
     zIndex: 100, overflowY: 'auto',
   },
