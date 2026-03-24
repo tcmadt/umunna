@@ -17,7 +17,6 @@ const LANE_LABELS = [
 
 export default function App() {
   const { people, loading, error } = useSheetData(Infinity);
-  const [hoveredUnion, setHoveredUnion] = useState<string | null>(null);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,7 +87,6 @@ export default function App() {
 
   const activePaths = useMemo(() => {
     const s = new Set<string>();
-    if (hoveredUnion) s.add(hoveredUnion);
     if (!highlight) return s;
     if (highlight.mode === 'hover') {
       unions.forEach(u => {
@@ -101,9 +99,9 @@ export default function App() {
       });
     }
     return s;
-  }, [hoveredUnion, highlight, unions]);
+  }, [highlight, unions]);
 
-  const hasHighlight = highlight !== null || hoveredUnion !== null;
+  const hasHighlight = highlight !== null;
   const selectedPerson: Person | null = selected !== null ? (people[selected] ?? null) : null;
 
   // ── Search ──────────────────────────────────────────────────────────────────
@@ -283,29 +281,6 @@ export default function App() {
         </svg>
       </div>
 
-      {/* Union legend */}
-      <div style={styles.legend}>
-        {unions.filter(u => u.spouses.length >= 2 || u.children.length > 0).map(u => (
-          <div key={u.id}
-            onMouseEnter={() => setHoveredUnion(u.id)}
-            onMouseLeave={() => setHoveredUnion(null)}
-            style={{
-              ...styles.pill,
-              background: hoveredUnion === u.id ? u.color + '22' : 'transparent',
-              border: `1px solid ${hoveredUnion === u.id ? u.color : '#3A1E0C'}`,
-            }}
-          >
-            <div style={{ width: 18, height: 2, background: u.color, borderRadius: 1 }} />
-            <span style={{
-              fontSize: 10, fontFamily: "'Outfit', sans-serif", letterSpacing: 0.5,
-              color: hoveredUnion === u.id ? u.color : '#8A7060',
-              transition: 'color 0.15s',
-            }}>
-              {u.spouses.map(id => people[id]?.name.split(' ')[0] ?? '?').join(' & ')}
-            </span>
-          </div>
-        ))}
-      </div>
 
       {/* Info panel */}
       {selectedPerson && (
