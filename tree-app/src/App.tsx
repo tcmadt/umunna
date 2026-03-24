@@ -319,9 +319,19 @@ export default function App() {
 
       {/* Slim header */}
       {!isPrinting && <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', flexShrink: 0, flexWrap: 'wrap' }}>
-        <h1 style={{ color: '#F0E8D8', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
-          UMUNNA — FAMILY TREE
-        </h1>
+        <a href="/umunna/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', flexShrink: 0 }}>
+          <svg width="28" height="28" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <ellipse cx="16" cy="9.5" rx="5.5" ry="8" fill="#1C0E06" stroke="#D08A25" strokeWidth="1.5"/>
+            <ellipse cx="16" cy="22.5" rx="5.5" ry="8" fill="#1C0E06" stroke="#B85E28" strokeWidth="1.5"/>
+            <ellipse cx="9.5" cy="16" rx="8" ry="5.5" fill="#1C0E06" stroke="#D08A25" strokeWidth="1.5"/>
+            <ellipse cx="22.5" cy="16" rx="8" ry="5.5" fill="#1C0E06" stroke="#B85E28" strokeWidth="1.5"/>
+            <circle cx="16" cy="16" r="3.5" fill="#E8BF60"/>
+            <circle cx="16" cy="16" r="1.5" fill="#1C0E06"/>
+          </svg>
+          <h1 style={{ color: '#F0E8D8', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
+            UMUNNA — FAMILY TREE
+          </h1>
+        </a>
         <p style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1, margin: 0, flex: 1 }}>
           Hover to explore · click for bloodline
         </p>
