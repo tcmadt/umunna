@@ -63,13 +63,17 @@ export default function App() {
       const spouseIds = new Set<number>();
       const parentIds = new Set<number>(person.pIds);
       const childIds = new Set<number>();
+      const siblingIds = new Set<number>();
       unions.forEach(u => {
         if (u.spouses.includes(hoveredPerson)) {
           u.spouses.forEach(s => { if (s !== hoveredPerson) spouseIds.add(s); });
           u.children.forEach(c => childIds.add(c));
         }
+        if (u.children.includes(hoveredPerson)) {
+          u.children.forEach(s => { if (s !== hoveredPerson) siblingIds.add(s); });
+        }
       });
-      return { mode: 'hover' as const, id: hoveredPerson, spouseIds, parentIds, childIds };
+      return { mode: 'hover' as const, id: hoveredPerson, spouseIds, parentIds, childIds, siblingIds };
     }
     if (selected !== null) {
       return {
@@ -237,6 +241,8 @@ export default function App() {
                   stroke = '#B85E28'; sw = 2;
                 } else if (highlight.childIds.has(person.id)) {
                   stroke = '#E8BF60'; sw = 2;
+                } else if (highlight.siblingIds.has(person.id)) {
+                  stroke = '#4AB8B0'; sw = 2;
                 } else {
                   fill = '#0C0702'; stroke = '#1a0c02'; txtClr = '#3a2010'; nodeOpacity = 0.35;
                 }
