@@ -166,7 +166,7 @@ export default function App() {
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [loading]);
 
   // ── Search ──────────────────────────────────────────────────────────────────
   const searchHits = useMemo(() => {
