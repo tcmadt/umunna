@@ -5,7 +5,7 @@ import {
 } from './dag';
 import type { Person } from './types';
 
-const NW = 72, NH = 28, GAPY = 130, PAD = 60;
+const NW = 110, NH = 36, GAPY = 160, PAD = 80, TOP_PAD = 60;
 
 const LANE_LABELS = [
   'GREAT-GRANDPARENTS', 'GREAT-GRANDPARENTS',
@@ -21,21 +21,29 @@ export default function App() {
   const [selected, setSelected] = useState<number | null>(null);
 
   const { unions, pos, svgW, svgH, lanes } = useMemo(() => {
-    const empty = { unions: [], gens: {} as Record<number,number>, pos: {} as Record<number,{x:number;y:number}>, svgW: 800, svgH: 400, lanes: [] as {g:number;y:number;h:number;label:string}[] };
+    const empty = {
+      unions: [], gens: {} as Record<number, number>,
+      pos: {} as Record<number, { x: number; y: number }>,
+      svgW: 800, svgH: 400,
+      lanes: [] as { g: number; y: number; h: number; label: string }[],
+    };
     if (!Object.keys(people).length) return empty;
 
     const unions = deriveUnions(people);
     const gens = assignGens(people, unions);
     const pos = computeLayout(people, unions, gens, NW, GAPY);
 
+    // Shift every y down by TOP_PAD so gen-0 nodes don't clip at the top
+    Object.values(pos).forEach(p => { p.y += TOP_PAD; });
+
     const maxG = Math.max(...Object.values(gens), 0);
     const xs = Object.values(pos).map(p => p.x);
-    const svgW = Math.max(800, Math.max(...xs) + NW + PAD * 2);
-    const svgH = maxG * GAPY + NH + PAD * 2;
+    const svgW = Math.max(800, Math.max(...xs) + NW / 2 + PAD);
+    const svgH = maxG * GAPY + NH + PAD + TOP_PAD * 2;
 
     const lanes = Array.from({ length: maxG + 1 }, (_, g) => ({
       g,
-      y: Math.max(0, g * GAPY - GAPY / 2),
+      y: Math.max(0, g * GAPY - GAPY / 2 + TOP_PAD),
       h: GAPY,
       label: LANE_LABELS[g] ?? `GEN ${g}`,
     }));
@@ -67,12 +75,26 @@ export default function App() {
 
   return (
     <div style={styles.page}>
-      <h1 style={styles.title}>UMUNNA — FAMILY TREE</h1>
-      <p style={styles.subtitle}>Hover any person or family to isolate their connections · click to view details</p>
 
+      {/* Slim header */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, padding: '10px 20px', flexShrink: 0 }}>
+        <h1 style={{ color: '#e2e8f0', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0 }}>
+          UMUNNA — FAMILY TREE
+        </h1>
+        <p style={{ color: '#374151', fontSize: 10, letterSpacing: 1, margin: 0 }}>
+          Hover to isolate · click for details
+        </p>
+      </div>
+
+      {/* Tree card — fills remaining height */}
       <div style={styles.card}>
-        <svg width={svgW} height={svgH} style={{ display: 'block', overflow: 'visible' }}>
-
+        <svg
+          viewBox={`0 0 ${svgW} ${svgH}`}
+          width="100%"
+          height="100%"
+          preserveAspectRatio="xMidYMid meet"
+          style={{ display: 'block' }}
+        >
           {/* Lane banding */}
           {lanes.map((lane, i) => (
             <g key={i}>
@@ -128,7 +150,7 @@ export default function App() {
                   strokeWidth={isActive || isSelected ? 2 : 1}
                   style={{ transition: 'all 0.2s' }} />
                 <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={10} fill={txtClr} fontFamily="Georgia, serif"
+                  fontSize={9} fill={txtClr} fontFamily="Georgia, serif"
                   style={{ transition: 'fill 0.2s', pointerEvents: 'none' }}>
                   {person.name.split(' ')[0]}
                 </text>
@@ -226,24 +248,25 @@ function PanelSection({ label, items, accent }: { label: string; items: Person[]
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    background: '#0b0b18', minHeight: '100vh',
-    display: 'flex', flexDirection: 'column',
-    alignItems: 'center', padding: '32px 24px 60px',
+    background: '#0b0b18',
+    height: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
     fontFamily: 'Georgia, serif',
   },
-  title: {
-    color: '#e2e8f0', fontSize: 18, letterSpacing: 4,
-    fontWeight: 300, margin: '0 0 4px',
-  },
-  subtitle: { color: '#374151', fontSize: 11, letterSpacing: 1, margin: '0 0 20px' },
   card: {
-    background: '#11111e', border: '1px solid #1e1e38',
-    borderRadius: 14, padding: 10, overflowX: 'auto',
-    boxShadow: '0 24px 80px #00000080', maxWidth: '100%',
+    flex: 1,
+    background: '#11111e',
+    borderTop: '1px solid #1e1e38',
+    borderBottom: '1px solid #1e1e38',
+    overflow: 'hidden',
+    position: 'relative',
   },
   legend: {
-    display: 'flex', gap: 8, marginTop: 14,
-    flexWrap: 'wrap', justifyContent: 'center', maxWidth: 820,
+    display: 'flex', gap: 8, padding: '8px 20px',
+    flexWrap: 'wrap', justifyContent: 'center',
+    flexShrink: 0,
   },
   pill: {
     display: 'flex', alignItems: 'center', gap: 6,
