@@ -646,6 +646,8 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   const [editCurrentLocation, setEditCurrentLocation] = useState('');
   const [editPhotoUrl, setEditPhotoUrl] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [editParents, setEditParents] = useState('');
+  const [editSpouses, setEditSpouses] = useState('');
   const [editSubmittedBy, setEditSubmittedBy] = useState('');
   const [editStatus, setEditStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
 
@@ -711,6 +713,14 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
     if (editCurrentLocation.trim()) fields.currentLocation = editCurrentLocation.trim();
     if (editPhotoUrl.trim()) fields.photoUrl = editPhotoUrl.trim();
     if (editNotes.trim()) fields.notes = editNotes.trim();
+    if (editParents.trim()) {
+      const ids = editParents.split(',').map(s => resolvePersonId(s.trim())).filter((id): id is number => id !== null);
+      if (ids.length) fields.pIds = ids.join(',');
+    }
+    if (editSpouses.trim()) {
+      const ids = editSpouses.split(',').map(s => resolvePersonId(s.trim())).filter((id): id is number => id !== null);
+      if (ids.length) fields.sIds = ids.join(',');
+    }
     if (Object.keys(fields).length === 0) { alert('No changes entered.'); return; }
     setEditStatus('sending');
     try {
@@ -844,6 +854,12 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                 </ModalField>
                 <ModalField label="Notes">
                   <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)} style={{ ...styles.modalInput, resize: 'vertical', minHeight: 56 }} placeholder="Correction or addition…" />
+                </ModalField>
+                <ModalField label="Parents (comma-separated names or IDs)">
+                  <input value={editParents} onChange={e => setEditParents(e.target.value)} style={styles.modalInput} placeholder="e.g. Chukwu Obi, Ada Obi" />
+                </ModalField>
+                <ModalField label="Spouses (comma-separated names or IDs)">
+                  <input value={editSpouses} onChange={e => setEditSpouses(e.target.value)} style={styles.modalInput} placeholder="e.g. Ngozi Obi" />
                 </ModalField>
                 <ModalField label="Your name (optional)">
                   <input value={editSubmittedBy} onChange={e => setEditSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
