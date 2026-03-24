@@ -167,6 +167,8 @@ export function computeLayout(
 
     // ── Has children: recurse first, then center parents above ──
     let x = startX;
+    // Snapshot of already-placed nodes before we place any children in this subtree
+    const preplacedSnapshot = new Set(placed);
 
     // Sort all children by birth year (oldest → leftmost)
     const sortedChildren = [...u.children].sort((a, b) =>
@@ -198,10 +200,33 @@ export function computeLayout(
       ? (Math.min(...childXs) + Math.max(...childXs)) / 2
       : startX + ((u.spouses.length - 1) * GAPX) / 2;
 
-    placeSpouses(u, centerX - ((u.spouses.length - 1) * GAPX) / 2, parentGen * GAPY);
+    // Clamp: parents must not be placed left of startX (would overlap prior siblings).
+    // If centering would violate this, shift all children placed in this subtree rightward.
+    const idealLeft = centerX - ((u.spouses.length - 1) * GAPX) / 2;
+    if (idealLeft < startX) {
+      const shift = startX - idealLeft;
+      // Shift every node placed during this subtree call
+      Object.keys(pos).forEach(id => {
+        const n = Number(id);
+        if (!preplacedSnapshot.has(n)) pos[n].x += shift;
+      });
+      // Recompute childXs after shift
+      childXs.length = 0;
+      childUs.forEach(cu => {
+        cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
+      });
+      singles.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
+      x += shift;
+    }
+
+    const finalCenterX = childXs.length
+      ? (Math.min(...childXs) + Math.max(...childXs)) / 2
+      : startX + ((u.spouses.length - 1) * GAPX) / 2;
+
+    placeSpouses(u, finalCenterX - ((u.spouses.length - 1) * GAPX) / 2, parentGen * GAPY);
 
     // Ensure we return far enough right that next sibling doesn't overlap
-    const rightEdge = centerX + (u.spouses.length / 2) * GAPX + GAPX * 0.5;
+    const rightEdge = finalCenterX + (u.spouses.length / 2) * GAPX + GAPX * 0.5;
     return Math.max(x, rightEdge);
   }
 
