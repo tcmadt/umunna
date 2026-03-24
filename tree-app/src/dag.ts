@@ -1,8 +1,8 @@
 import type { PersonMap, Union } from './types';
 
 const PALETTE = [
-  '#f43f5e', '#3b82f6', '#a855f7', '#10b981',
-  '#6366f1', '#f59e0b', '#0ea5e9', '#ec4899',
+  '#D08A25', '#B85E28', '#52A86E', '#4E8FCC',
+  '#8A52C8', '#4AB8B0', '#C05050', '#E8BF60',
 ];
 
 // ─── DERIVE UNIONS ────────────────────────────────────────────────────────────
@@ -168,14 +168,23 @@ export function computeLayout(
     // ── Has children: recurse first, then center parents above ──
     let x = startX;
 
-    childUs.forEach(cu => { x = layoutSubtree(cu, x); });
-
-    singles.forEach(c => {
-      if (!placed.has(c)) {
+    // Sort all children by birth year (oldest → leftmost)
+    const sortedChildren = [...u.children].sort((a, b) =>
+      (parseInt(people[a]?.birthYear || '9999')) - (parseInt(people[b]?.birthYear || '9999'))
+    );
+    const processedChildUs = new Set<string>();
+    sortedChildren.forEach(c => {
+      const cu = childUs.find(cu => cu.spouses.includes(c));
+      if (cu) {
+        if (!processedChildUs.has(cu.id)) {
+          processedChildUs.add(cu.id);
+          x = layoutSubtree(cu, x);
+        }
+      } else if (!placed.has(c)) {
         pos[c] = { x, y: childY };
         placed.add(c);
+        x += GAPX;
       }
-      x += GAPX;
     });
 
     // Collect all child x-positions to find center
@@ -290,4 +299,39 @@ export function personUnionIds(pid: number, unions: Union[]): string[] {
   return unions
     .filter(u => u.spouses.includes(pid) || u.children.includes(pid))
     .map(u => u.id);
+}
+
+export function getAncestors(pid: number, people: PersonMap): Set<number> {
+  const result = new Set<number>();
+  const visited = new Set<number>();
+  const queue = [...(people[pid]?.pIds ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (people[id]) {
+      result.add(id);
+      people[id].pIds.forEach(p => queue.push(p));
+    }
+  }
+  return result;
+}
+
+export function getDescendants(pid: number, unions: Union[]): Set<number> {
+  const result = new Set<number>();
+  const visited = new Set<number>();
+  const queue = [pid];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    unions.forEach(u => {
+      if (u.spouses.includes(id)) {
+        u.children.forEach(c => {
+          if (!result.has(c)) { result.add(c); queue.push(c); }
+        });
+      }
+    });
+  }
+  return result;
 }

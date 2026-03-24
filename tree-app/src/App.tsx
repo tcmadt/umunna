@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useSheetData } from './useSheetData';
 import {
-  deriveUnions, assignGens, computeLayout, getPaths, personUnionIds,
+  deriveUnions, assignGens, computeLayout, getPaths,
+  getAncestors, getDescendants,
 } from './dag';
 import type { Person } from './types';
 
@@ -19,6 +20,9 @@ export default function App() {
   const [hoveredUnion, setHoveredUnion] = useState<string | null>(null);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchIdx, setSearchIdx] = useState(0);
+  const [focusedViewBox, setFocusedViewBox] = useState<string | null>(null);
 
   const { unions, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
@@ -33,7 +37,6 @@ export default function App() {
     const gens = assignGens(people, unions);
     const pos = computeLayout(people, unions, gens, NW, GAPY);
 
-    // Shift every y down by TOP_PAD so gen-0 nodes don't clip at the top
     Object.values(pos).forEach(p => { p.y += TOP_PAD; });
 
     const maxG = Math.max(...Object.values(gens), 0);
@@ -51,25 +54,86 @@ export default function App() {
     return { unions, gens, pos, svgW, svgH, lanes };
   }, [people]);
 
-  const activeIds = useMemo(() => {
+  // ── Highlight state ─────────────────────────────────────────────────────────
+  // hover: 1-degree neighborhood; bloodline: full ancestor+descendant chain
+  const highlight = useMemo(() => {
+    if (hoveredPerson !== null) {
+      const person = people[hoveredPerson];
+      if (!person) return null;
+      const spouseIds = new Set<number>();
+      const parentIds = new Set<number>(person.pIds);
+      const childIds = new Set<number>();
+      unions.forEach(u => {
+        if (u.spouses.includes(hoveredPerson)) {
+          u.spouses.forEach(s => { if (s !== hoveredPerson) spouseIds.add(s); });
+          u.children.forEach(c => childIds.add(c));
+        }
+      });
+      return { mode: 'hover' as const, id: hoveredPerson, spouseIds, parentIds, childIds };
+    }
+    if (selected !== null) {
+      return {
+        mode: 'bloodline' as const,
+        id: selected,
+        ancestors: getAncestors(selected, people),
+        descendants: getDescendants(selected, unions),
+      };
+    }
+    return null;
+  }, [hoveredPerson, selected, people, unions]);
+
+  const activePaths = useMemo(() => {
     const s = new Set<string>();
     if (hoveredUnion) s.add(hoveredUnion);
-    if (hoveredPerson !== null) personUnionIds(hoveredPerson, unions).forEach(id => s.add(id));
+    if (!highlight) return s;
+    if (highlight.mode === 'hover') {
+      unions.forEach(u => {
+        if (u.spouses.includes(highlight.id) || u.children.includes(highlight.id)) s.add(u.id);
+      });
+    } else {
+      const blood = new Set([highlight.id, ...highlight.ancestors, ...highlight.descendants]);
+      unions.forEach(u => {
+        if (u.spouses.some(id => blood.has(id)) || u.children.some(id => blood.has(id))) s.add(u.id);
+      });
+    }
     return s;
-  }, [hoveredUnion, hoveredPerson, unions]);
+  }, [hoveredUnion, highlight, unions]);
 
-  const hasActive = activeIds.size > 0;
+  const hasHighlight = highlight !== null || hoveredUnion !== null;
   const selectedPerson: Person | null = selected !== null ? (people[selected] ?? null) : null;
+
+  // ── Search ──────────────────────────────────────────────────────────────────
+  const searchHits = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return Object.values(people).filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      p.nicks.some(n => n.toLowerCase().includes(q))
+    ).map(p => p.id);
+  }, [searchQuery, people]);
+
+  const VB_W = 500, VB_H = 320;
+  function centerOn(id: number) {
+    const p = pos[id];
+    if (!p) return;
+    setFocusedViewBox(`${p.x - VB_W / 2} ${p.y - VB_H / 2} ${VB_W} ${VB_H}`);
+  }
+  function stepSearch(dir: 1 | -1) {
+    if (!searchHits.length) return;
+    const next = (searchIdx + dir + searchHits.length) % searchHits.length;
+    setSearchIdx(next);
+    centerOn(searchHits[next]);
+  }
 
   if (loading) return (
     <div style={styles.page}>
-      <div style={{ color: '#374151', fontSize: 13, letterSpacing: 2 }}>Loading family data…</div>
+      <div style={{ color: '#8A7060', fontSize: 13, letterSpacing: 2 }}>Loading family data…</div>
     </div>
   );
 
   if (error) return (
     <div style={styles.page}>
-      <div style={{ color: '#f43f5e', fontSize: 13 }}>{error}</div>
+      <div style={{ color: '#C05050', fontSize: 13 }}>{error}</div>
     </div>
   );
 
@@ -77,31 +141,51 @@ export default function App() {
     <div style={styles.page}>
 
       {/* Slim header */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, padding: '10px 20px', flexShrink: 0 }}>
-        <h1 style={{ color: '#e2e8f0', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', flexShrink: 0, flexWrap: 'wrap' }}>
+        <h1 style={{ color: '#F0E8D8', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
           UMUNNA — FAMILY TREE
         </h1>
-        <p style={{ color: '#374151', fontSize: 10, letterSpacing: 1, margin: 0 }}>
-          Hover to isolate · click for details
+        <p style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1, margin: 0, flex: 1 }}>
+          Hover to explore · click for bloodline
         </p>
+        {/* Search */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="text"
+            placeholder="Search name…"
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0); if (e.target.value.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(e.target.value.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(e.target.value.trim().toLowerCase()))).map(p => p.id); if (hits.length) { const p = pos[hits[0]]; if (p) setFocusedViewBox(`${p.x - VB_W/2} ${p.y - VB_H/2} ${VB_W} ${VB_H}`); } } else { setFocusedViewBox(null); } }}
+            style={styles.searchInput}
+          />
+          {searchHits.length > 0 && (
+            <>
+              <span style={{ color: '#8A7060', fontSize: 10 }}>{searchIdx + 1}/{searchHits.length}</span>
+              <button onClick={() => stepSearch(-1)} style={styles.searchBtn}>‹</button>
+              <button onClick={() => stepSearch(1)} style={styles.searchBtn}>›</button>
+            </>
+          )}
+          {focusedViewBox && (
+            <button onClick={() => { setFocusedViewBox(null); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
+          )}
+        </div>
       </div>
 
       {/* Tree card — fills remaining height */}
       <div style={styles.card}>
         <svg
-          viewBox={`0 0 ${svgW} ${svgH}`}
+          viewBox={focusedViewBox ?? `0 0 ${svgW} ${svgH}`}
           width="100%"
           height="100%"
           preserveAspectRatio="xMidYMid meet"
-          style={{ display: 'block' }}
+          style={{ display: 'block', transition: 'all 0.5s ease' }}
         >
           {/* Lane banding */}
           {lanes.map((lane, i) => (
             <g key={i}>
               <rect x={0} y={lane.y} width={svgW} height={lane.h}
-                fill={i % 2 === 0 ? '#13132a' : '#111128'} />
-              <text x={10} y={lane.y + 14} fontSize={7.5} fill="#252545"
-                fontFamily="Georgia, serif" letterSpacing={1.5}>
+                fill={i % 2 === 0 ? '#130A02' : '#0E0702'} />
+              <text x={10} y={lane.y + 14} fontSize={7.5} fill="#2a1408"
+                fontFamily="'Outfit', sans-serif" letterSpacing={1.5}>
                 {lane.label}
               </text>
             </g>
@@ -110,11 +194,11 @@ export default function App() {
           {/* Union paths */}
           {unions.map(u => {
             const paths = getPaths(u, pos);
-            const isActive = activeIds.has(u.id);
-            const dimmed = hasActive && !isActive;
+            const isActive = activePaths.has(u.id);
+            const dimmed = hasHighlight && !isActive;
             return paths.map((p, i) => (
               <path key={`${u.id}-${i}`} d={p.d} fill="none"
-                stroke={dimmed ? '#1a1a30' : u.color}
+                stroke={dimmed ? '#1a0c02' : u.color}
                 strokeWidth={isActive
                   ? (p.type === 'marriage' ? 2.5 : 3)
                   : (p.type === 'marriage' ? 1.5 : 2)}
@@ -129,15 +213,45 @@ export default function App() {
           {Object.values(people).map(person => {
             const p = pos[person.id];
             if (!p) return null;
-            const uids = personUnionIds(person.id, unions);
-            const isActive = hasActive && uids.some(uid => activeIds.has(uid));
-            const dimmed = hasActive && !isActive;
             const isFemale = person.g === 'f';
             const isSelected = person.id === selected;
 
-            const fill   = dimmed ? '#0d0d1c' : isFemale ? '#2a1525' : '#141a2e';
-            const stroke = dimmed ? '#1a1a30' : isFemale ? '#db2777' : '#3b82f6';
-            const txtClr = dimmed ? '#222240' : isFemale ? '#f9a8d4' : '#93c5fd';
+            // Base warm earthy colors
+            let fill   = isFemale ? '#160D05' : '#1C0E06';
+            let stroke = isFemale ? '#D08A25' : '#B85E28';
+            let txtClr = isFemale ? '#F0E8D8' : '#E8BF60';
+            let nodeOpacity = 1;
+            let sw = isSelected ? 2.5 : 1;
+
+            // Search hit glow (overrides dimming but not hover/bloodline)
+            const isSearchHit = searchHits.includes(person.id);
+            const isCurrentHit = searchHits[searchIdx] === person.id;
+
+            if (highlight) {
+              if (highlight.mode === 'hover') {
+                if (person.id === highlight.id) {
+                  stroke = '#F0E8D8'; sw = 3;
+                } else if (highlight.spouseIds.has(person.id)) {
+                  stroke = '#D08A25'; sw = 2;
+                } else if (highlight.parentIds.has(person.id)) {
+                  stroke = '#B85E28'; sw = 2;
+                } else if (highlight.childIds.has(person.id)) {
+                  stroke = '#E8BF60'; sw = 2;
+                } else {
+                  fill = '#0C0702'; stroke = '#1a0c02'; txtClr = '#3a2010'; nodeOpacity = 0.35;
+                }
+              } else { // bloodline
+                if (person.id === highlight.id) {
+                  fill = '#2a1a08'; stroke = '#F0E8D8'; sw = 3;
+                } else if (highlight.ancestors.has(person.id)) {
+                  stroke = '#D08A25'; sw = 2;
+                } else if (highlight.descendants.has(person.id)) {
+                  stroke = '#E8BF60'; sw = 2;
+                } else {
+                  fill = '#0C0702'; stroke = '#120a02'; txtClr = '#2a1808'; nodeOpacity = 0.18;
+                }
+              }
+            }
 
             return (
               <g key={person.id} style={{ cursor: 'pointer' }}
@@ -146,12 +260,15 @@ export default function App() {
                 onClick={() => setSelected(isSelected ? null : person.id)}
               >
                 <rect x={p.x - NW / 2} y={p.y - NH / 2} width={NW} height={NH} rx={5}
-                  fill={fill} stroke={stroke}
-                  strokeWidth={isActive || isSelected ? 2 : 1}
+                  fill={fill}
+                  stroke={isCurrentHit ? '#F0E8D8' : isSearchHit ? '#E8BF60' : stroke}
+                  strokeWidth={isCurrentHit ? 3 : isSearchHit ? 2 : sw}
+                  opacity={nodeOpacity}
                   style={{ transition: 'all 0.2s' }} />
                 <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                  fontSize={9} fill={txtClr} fontFamily="Georgia, serif"
-                  style={{ transition: 'fill 0.2s', pointerEvents: 'none' }}>
+                  fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
+                  opacity={nodeOpacity}
+                  style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
                   {person.name.split(' ')[0]}
                 </text>
               </g>
@@ -169,13 +286,13 @@ export default function App() {
             style={{
               ...styles.pill,
               background: hoveredUnion === u.id ? u.color + '22' : 'transparent',
-              border: `1px solid ${hoveredUnion === u.id ? u.color : '#1e1e38'}`,
+              border: `1px solid ${hoveredUnion === u.id ? u.color : '#3A1E0C'}`,
             }}
           >
             <div style={{ width: 18, height: 2, background: u.color, borderRadius: 1 }} />
             <span style={{
-              fontSize: 10, fontFamily: 'Georgia, serif', letterSpacing: 0.5,
-              color: hoveredUnion === u.id ? u.color : '#374151',
+              fontSize: 10, fontFamily: "'Outfit', sans-serif", letterSpacing: 0.5,
+              color: hoveredUnion === u.id ? u.color : '#8A7060',
               transition: 'color 0.15s',
             }}>
               {u.spouses.map(id => people[id]?.name.split(' ')[0] ?? '?').join(' & ')}
@@ -198,7 +315,7 @@ function InfoPanel({ person, people, onClose }: {
   onClose: () => void;
 }) {
   const isFemale = person.g === 'f';
-  const accent = isFemale ? '#db2777' : '#3b82f6';
+  const accent = isFemale ? '#D08A25' : '#B85E28';
   const parents  = person.pIds.map(id => people[id]).filter(Boolean) as Person[];
   const spouses  = person.sIds.map(id => people[id]).filter(Boolean) as Person[];
   const children = Object.values(people).filter(p => p.pIds.includes(person.id));
@@ -208,23 +325,23 @@ function InfoPanel({ person, people, onClose }: {
       <div style={{ ...styles.panelHead, borderBottom: `1px solid ${accent}44` }}>
         <div>
           <div style={{ fontSize: 24, marginBottom: 4 }}>{isFemale ? '👩🏾' : '👨🏾'}</div>
-          <div style={{ fontFamily: 'Georgia, serif', fontSize: 15, color: accent }}>
+          <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 15, color: accent }}>
             {person.name}
           </div>
           {person.nicks.length > 0 && (
-            <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: '#6b4c2a', fontStyle: 'italic', marginTop: 2 }}>
               "{person.nicks.join(', ')}"
             </div>
           )}
         </div>
         <button onClick={onClose} style={styles.closeBtn}>✕</button>
       </div>
-      <div style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.9, color: '#9ca3af' }}>
+      <div style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.9, color: '#8A7060', fontFamily: "'Outfit', sans-serif" }}>
         {person.birthYear && <div><span style={styles.lbl}>Born</span>{person.birthYear}</div>}
         {person.deathYear && <div><span style={styles.lbl}>Died</span>{person.deathYear}</div>}
         {person.placeOfBirth && <div><span style={styles.lbl}>From</span>{person.placeOfBirth}</div>}
         {person.currentLocation && <div><span style={styles.lbl}>Lives</span>{person.currentLocation}</div>}
-        {person.notes && <div style={{ marginTop: 8, color: '#6b7280', lineHeight: 1.6 }}>{person.notes}</div>}
+        {person.notes && <div style={{ marginTop: 8, color: '#6b4c2a', lineHeight: 1.6 }}>{person.notes}</div>}
         {parents.length > 0 && <PanelSection label="Parents" items={parents} accent={accent} />}
         {spouses.length > 0 && <PanelSection label={spouses.length > 1 ? 'Spouses' : 'Spouse'} items={spouses} accent={accent} />}
         {children.length > 0 && <PanelSection label="Children" items={children} accent={accent} />}
@@ -240,7 +357,7 @@ function PanelSection({ label, items, accent }: { label: string; items: Person[]
         {label}
       </div>
       {items.map(p => (
-        <div key={p.id} style={{ color: '#d1d5db', fontSize: 12 }}>{p.name}</div>
+        <div key={p.id} style={{ color: '#F0E8D8', fontSize: 12, fontFamily: "'Outfit', sans-serif" }}>{p.name}</div>
       ))}
     </div>
   );
@@ -248,18 +365,18 @@ function PanelSection({ label, items, accent }: { label: string; items: Person[]
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    background: '#0b0b18',
+    background: '#0C0702',
     height: '100vh',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    fontFamily: 'Georgia, serif',
+    fontFamily: "'Outfit', Georgia, sans-serif",
   },
   card: {
     flex: 1,
-    background: '#11111e',
-    borderTop: '1px solid #1e1e38',
-    borderBottom: '1px solid #1e1e38',
+    background: '#160D05',
+    borderTop: '1px solid #3A1E0C',
+    borderBottom: '1px solid #3A1E0C',
     overflow: 'hidden',
     position: 'relative',
   },
@@ -275,11 +392,21 @@ const styles: Record<string, React.CSSProperties> = {
   },
   panel: {
     position: 'fixed', right: 0, top: 0, bottom: 0,
-    width: 280, background: '#11111e',
-    borderLeft: '1px solid #1e1e38',
+    width: 280, background: '#160D05',
+    borderLeft: '1px solid #3A1E0C',
     zIndex: 100, overflowY: 'auto',
   },
   panelHead: { padding: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
-  closeBtn: { background: 'none', border: 'none', color: '#374151', cursor: 'pointer', fontSize: 14 },
-  lbl: { color: '#4b5563', marginRight: 6 },
+  closeBtn: { background: 'none', border: 'none', color: '#8A7060', cursor: 'pointer', fontSize: 14 },
+  lbl: { color: '#6b4c2a', marginRight: 6 },
+  searchInput: {
+    background: '#1C0E06', border: '1px solid #3A1E0C', borderRadius: 4,
+    color: '#F0E8D8', fontSize: 11, padding: '4px 8px', outline: 'none',
+    fontFamily: "'Outfit', sans-serif", width: 140,
+  },
+  searchBtn: {
+    background: 'none', border: '1px solid #3A1E0C', borderRadius: 4,
+    color: '#8A7060', cursor: 'pointer', fontSize: 12, padding: '3px 7px',
+  },
 };
+
