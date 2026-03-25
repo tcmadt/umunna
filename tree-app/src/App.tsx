@@ -707,7 +707,7 @@ function InfoPanel({ person, people, onClose, historianMode, onApprove, onReject
           )}
           {person.submittedBy && (
             <div style={{ fontSize: 10, color: '#6b4c2a', marginTop: 2 }}>
-              Suggested by: {person.submittedBy}
+              {person.pending ? 'Suggested' : 'Added'} by: {people[Number(person.submittedBy)]?.name ?? person.submittedBy}
             </div>
           )}
         </div>
@@ -965,7 +965,7 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                   <input value={addPhotoUrl} onChange={e => setAddPhotoUrl(e.target.value)} style={styles.modalInput} placeholder="https://…" />
                 </ModalField>
                 <ModalField label="Your name (optional)">
-                  <input value={addSubmittedBy} onChange={e => setAddSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
+                  <PersonAutocomplete people={confirmedPeople} value={addSubmittedBy} onChange={setAddSubmittedBy} placeholder="Search your name…" />
                 </ModalField>
                 {addStatus === 'error' && (
                   <div style={{ color: '#C05050', fontSize: 11 }}>Something went wrong. Please try again.</div>
@@ -1030,7 +1030,7 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
                   </select>
                 </ModalField>
                 <ModalField label="Your name (optional)">
-                  <input value={editSubmittedBy} onChange={e => setEditSubmittedBy(e.target.value)} style={styles.modalInput} placeholder="How should we credit you?" />
+                  <PersonAutocomplete people={confirmedPeople} value={editSubmittedBy} onChange={setEditSubmittedBy} placeholder="Search your name…" />
                 </ModalField>
                 {editStatus === 'error' && (
                   <div style={{ color: '#C05050', fontSize: 11 }}>Something went wrong. Please try again.</div>
@@ -1052,6 +1052,62 @@ function ModalField({ label, children }: { label: string; children: React.ReactN
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <label style={{ fontSize: 10, color: '#6b4c2a', letterSpacing: 0.8, fontFamily: "'Outfit', sans-serif" }}>{label}</label>
       {children}
+    </div>
+  );
+}
+
+// ── PersonAutocomplete ────────────────────────────────────────────────────────
+// value = node ID as string; onChange fires with the selected ID string
+
+function PersonAutocomplete({ people, value, onChange, placeholder }: {
+  people: Person[];
+  value: string;
+  onChange: (id: string) => void;
+  placeholder: string;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const selected = people.find(p => String(p.id) === value);
+  const filtered = (selected ? people : people.filter(p =>
+    p.name.toLowerCase().includes(query.toLowerCase())
+  )).slice(0, 20);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        value={selected ? selected.name : query}
+        onChange={e => { setQuery(e.target.value); onChange(''); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+        style={styles.modalInput}
+      />
+      {open && !selected && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0,
+          background: '#1C0E06', border: '1px solid #3A1E0C', borderRadius: 4,
+          maxHeight: 160, overflowY: 'auto', zIndex: 300,
+        }}>
+          {filtered.map(p => (
+            <div key={p.id}
+              onMouseDown={() => { onChange(String(p.id)); setQuery(''); setOpen(false); }}
+              style={{ padding: '6px 10px', cursor: 'pointer', color: '#F0E8D8', fontSize: 11,
+                fontFamily: "'Outfit', sans-serif" }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#2a1408')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              {p.name}
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <button
+          onMouseDown={() => { onChange(''); setQuery(''); }}
+          style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+            background: 'none', border: 'none', color: '#6b4c2a', cursor: 'pointer', fontSize: 11 }}
+        >✕</button>
+      )}
     </div>
   );
 }
