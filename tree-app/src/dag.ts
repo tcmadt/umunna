@@ -151,6 +151,12 @@ export function computeLayout(
   // Root unions: no spouse of theirs was produced by another union
   const rootUnions = unions.filter(u => !u.spouses.some(s => parentUnionOf(s) !== null));
 
+  // Sort: "secondary" root unions (where a spouse also appears in another union,
+  // e.g. a second marriage) go last, so the main tree is fully placed first.
+  const isSecondaryRoot = (u: Union) =>
+    u.spouses.some(s => unions.some(other => other !== u && other.spouses.includes(s)));
+  rootUnions.sort((a, b) => Number(isSecondaryRoot(a)) - Number(isSecondaryRoot(b)));
+
   // ── Recursive subtree layout ──────────────────────────────────────────────
   // Returns the next available x after placing this subtree.
   function layoutSubtree(u: Union, startX: number): number {
@@ -189,11 +195,18 @@ export function computeLayout(
       }
     });
 
-    // Collect all child x-positions to find center
+    // Collect all child x-positions to find center.
+    // For single-parent spine ancestors, center above the child person directly
+    // (not the midpoint of the child's couple) so the ancestor stacks as a straight
+    // vertical line above its child.
     const childXs: number[] = [];
-    childUs.forEach(cu => {
-      cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
-    });
+    if (u.spouses.length === 1 && childUs.length > 0) {
+      u.children.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
+    } else {
+      childUs.forEach(cu => {
+        cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
+      });
+    }
     singles.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
 
     const centerX = childXs.length
@@ -212,9 +225,13 @@ export function computeLayout(
       });
       // Recompute childXs after shift
       childXs.length = 0;
-      childUs.forEach(cu => {
-        cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
-      });
+      if (u.spouses.length === 1 && childUs.length > 0) {
+        u.children.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
+      } else {
+        childUs.forEach(cu => {
+          cu.spouses.forEach(s => { if (pos[s]) childXs.push(pos[s].x); });
+        });
+      }
       singles.forEach(c => { if (pos[c]) childXs.push(pos[c].x); });
       x += shift;
     }
