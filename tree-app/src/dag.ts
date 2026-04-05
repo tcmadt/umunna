@@ -176,10 +176,12 @@ export function computeLayout(
     // Snapshot of already-placed nodes before we place any children in this subtree
     const preplacedSnapshot = new Set(placed);
 
-    // Sort all children by birth year (oldest → leftmost)
-    const sortedChildren = [...u.children].sort((a, b) =>
-      (parseInt(people[a]?.birthYear || '9999')) - (parseInt(people[b]?.birthYear || '9999'))
-    );
+    // Sort all children by birth year (oldest → leftmost); tiebreak by ID (Sheet row order)
+    const sortedChildren = [...u.children].sort((a, b) => {
+      const ya = parseInt(people[a]?.birthYear || '9999');
+      const yb = parseInt(people[b]?.birthYear || '9999');
+      return ya !== yb ? ya - yb : a - b;
+    });
     const processedChildUs = new Set<string>();
     sortedChildren.forEach(c => {
       const cu = childUs.find(cu => cu.spouses.includes(c));

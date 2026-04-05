@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type { PersonMap, PendingEdit } from './types';
 
 function parseYearAndDate(raw: string): { year: string; date?: string } {
   if (!raw) return { year: '' };
@@ -6,7 +7,6 @@ function parseYearAndDate(raw: string): { year: string; date?: string } {
   if (m) return { year: m[3], date: raw };
   return { year: raw };
 }
-import type { PersonMap, PendingEdit } from './types';
 
 const ENDPOINT =
   'https://script.google.com/macros/s/AKfycbw7tNwm20dR-Wps69CuR9mb2mBPOAv3wVQwpiF8AqXmTbozdvKGLQv_miW6FC1FV55STQ/exec';
