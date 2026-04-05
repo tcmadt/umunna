@@ -13,8 +13,10 @@ export interface Person {
   nicks: string[];
   notes: string;
   rel: string;
-  birthYear: string;
-  deathYear: string;
+  birthYear: string;   // always 4-digit year or ''
+  deathYear: string;   // always 4-digit year or ''
+  birthDate?: string;  // full mm/dd/yyyy, only set when provided
+  deathDate?: string;  // full mm/dd/yyyy, only set when provided
   placeOfBirth: string;
   currentLocation: string;
   photoUrl: string;

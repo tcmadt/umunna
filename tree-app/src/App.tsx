@@ -604,6 +604,7 @@ export default function App() {
                       clipPath={`url(#clip-${person.id})`}
                       preserveAspectRatio="xMidYMid slice"
                       opacity={nodeOpacity}
+                      onError={(e) => { (e.target as SVGImageElement).style.display = 'none'; }}
                     />
                     <text x={p.x - NW / 2 + 34} y={p.y} dominantBaseline="middle"
                       fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
@@ -714,8 +715,8 @@ function InfoPanel({ person, people, onClose, historianMode, onApprove, onReject
         <button onClick={onClose} style={styles.closeBtn}>✕</button>
       </div>
       <div style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.9, color: '#8A7060', fontFamily: "'Outfit', sans-serif" }}>
-        {person.birthYear && <div><span style={styles.lbl}>Born</span>{person.birthYear}</div>}
-        {person.deathYear && <div><span style={styles.lbl}>Died</span>{person.deathYear}</div>}
+        {(person.birthDate || person.birthYear) && <div><span style={styles.lbl}>Born</span>{person.birthDate ?? person.birthYear}</div>}
+        {(person.deathDate || person.deathYear) && <div><span style={styles.lbl}>Died</span>{person.deathDate ?? person.deathYear}</div>}
         {person.placeOfBirth && <div><span style={styles.lbl}>From</span>{person.placeOfBirth}</div>}
         {person.currentLocation && <div><span style={styles.lbl}>Lives</span>{person.currentLocation}</div>}
         {person.notes && <div style={{ marginTop: 8, color: '#6b4c2a', lineHeight: 1.6 }}>{person.notes}</div>}

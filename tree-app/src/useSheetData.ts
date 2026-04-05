@@ -1,4 +1,11 @@
 import { useState, useEffect } from 'react';
+
+function parseYearAndDate(raw: string): { year: string; date?: string } {
+  if (!raw) return { year: '' };
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return { year: m[3], date: raw };
+  return { year: raw };
+}
 import type { PersonMap, PendingEdit } from './types';
 
 const ENDPOINT =
@@ -49,8 +56,16 @@ export function useSheetData(limit = 10) {
           nicks:           (p.nicks as string[]) ?? [],
           notes:           String(p.notes ?? ''),
           rel:             String(p.rel ?? 'distant'),
-          birthYear:       String(p.birthYear ?? ''),
-          deathYear:       String(p.deathYear ?? ''),
+          ...(() => {
+            const b = parseYearAndDate(String(p.birthYear ?? ''));
+            const d = parseYearAndDate(String(p.deathYear ?? ''));
+            return {
+              birthYear: b.year,
+              deathYear: d.year,
+              ...(b.date ? { birthDate: b.date } : {}),
+              ...(d.date ? { deathDate: d.date } : {}),
+            };
+          })(),
           placeOfBirth:    String(p.placeOfBirth ?? ''),
           currentLocation: String(p.currentLocation ?? ''),
           photoUrl:        String(p.photoUrl ?? ''),
