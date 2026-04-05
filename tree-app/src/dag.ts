@@ -191,6 +191,13 @@ export function computeLayout(
       const yb = extractBirthYear(people[b]?.birthYear);
       return ya !== yb ? ya - yb : a - b;
     });
+    if (sortedChildren.length > 1) {
+      console.log('[dag] sibling order:', sortedChildren.map(c => ({
+        id: c, name: people[c]?.name,
+        rawBirthYear: people[c]?.birthYear,
+        sortYear: extractBirthYear(people[c]?.birthYear),
+      })));
+    }
     const processedChildUs = new Set<string>();
     sortedChildren.forEach(c => {
       const cu = childUs.find(cu => cu.spouses.includes(c));
