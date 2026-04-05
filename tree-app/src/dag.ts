@@ -292,7 +292,7 @@ export function computeLayout(
 }
 
 // ─── PATHS ────────────────────────────────────────────────────────────────────
-export interface PathDef { type: 'marriage' | 'descent'; d: string; }
+export interface PathDef { type: 'marriage' | 'partner' | 'descent'; d: string; }
 
 export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
   const paths: PathDef[] = [];
@@ -303,9 +303,11 @@ export function getPaths(u: Union, pos: Record<number, Pos>): PathDef[] {
   const by = sy[0];
   const bx = (Math.min(...sx) + Math.max(...sx)) / 2;
 
-  // Marriage bar only for explicitly married unions
+  // Marriage bar for explicitly married unions; dotted partner bar for informal couples
   if (u.married && sx.length >= 2) {
     paths.push({ type: 'marriage', d: `M ${Math.min(...sx)},${by} H ${Math.max(...sx)}` });
+  } else if (!u.married && sx.length >= 2) {
+    paths.push({ type: 'partner', d: `M ${Math.min(...sx)},${by} H ${Math.max(...sx)}` });
   }
 
   const ch = u.children.map(c => pos[c]).filter(Boolean) as Pos[];

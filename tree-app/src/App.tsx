@@ -513,10 +513,10 @@ export default function App() {
               <path key={`${u.id}-${i}`} d={p.d} fill="none"
                 stroke={dimmed ? '#1a0c02' : u.color}
                 strokeWidth={isActive
-                  ? (p.type === 'marriage' ? 2.5 : 3)
-                  : (p.type === 'marriage' ? 1.5 : 2)}
-                strokeDasharray={p.type === 'marriage' ? '5,4' : 'none'}
-                strokeOpacity={dimmed ? 1 : isActive ? 1 : 0.65}
+                  ? (p.type === 'marriage' ? 2.5 : p.type === 'partner' ? 1.5 : 3)
+                  : (p.type === 'marriage' ? 1.5 : p.type === 'partner' ? 1 : 2)}
+                strokeDasharray={p.type === 'marriage' ? '5,4' : p.type === 'partner' ? '2,5' : 'none'}
+                strokeOpacity={dimmed ? 1 : p.type === 'partner' ? (isActive ? 0.65 : 0.4) : (isActive ? 1 : 0.65)}
                 style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }}
               />
             ));
