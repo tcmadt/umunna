@@ -121,13 +121,21 @@ export function assignGens(people: PersonMap, unions: Union[]): Record<number, n
 
 // ─── LAYOUT ───────────────────────────────────────────────────────────────────
 
-// Extracts a numeric year from either "1952" or "03/15/1952" for sort purposes.
+// Extracts a numeric year from "1952", "03/15/1952", or verbose JS Date strings
+// like "Wed Dec 18 1991 00:00:00 GMT..." (produced when Apps Script serializes
+// Google Sheets Date objects without formatDateCell_).
 function extractBirthYear(val: string | undefined): number {
   if (!val) return 9999;
+  // mm/dd/yyyy
   const full = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (full) return parseInt(full[3]);
+  // plain 4-digit year or leading year
   const y = parseInt(val);
-  return isNaN(y) ? 9999 : y;
+  if (!isNaN(y)) return y;
+  // verbose JS Date string — find first 19xx or 20xx year
+  const verbose = val.match(/\b((?:19|20)\d{2})\b/);
+  if (verbose) return parseInt(verbose[1]);
+  return 9999;
 }
 export interface Pos { x: number; y: number; }
 
@@ -191,13 +199,6 @@ export function computeLayout(
       const yb = extractBirthYear(people[b]?.birthYear);
       return ya !== yb ? ya - yb : a - b;
     });
-    if (sortedChildren.length > 1) {
-      console.log('[dag] sibling order:', sortedChildren.map(c => ({
-        id: c, name: people[c]?.name,
-        rawBirthYear: people[c]?.birthYear,
-        sortYear: extractBirthYear(people[c]?.birthYear),
-      })));
-    }
     const processedChildUs = new Set<string>();
     sortedChildren.forEach(c => {
       const cu = childUs.find(cu => cu.spouses.includes(c));
