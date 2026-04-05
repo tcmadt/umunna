@@ -120,6 +120,15 @@ export function assignGens(people: PersonMap, unions: Union[]): Record<number, n
 }
 
 // ─── LAYOUT ───────────────────────────────────────────────────────────────────
+
+// Extracts a numeric year from either "1952" or "03/15/1952" for sort purposes.
+function extractBirthYear(val: string | undefined): number {
+  if (!val) return 9999;
+  const full = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (full) return parseInt(full[3]);
+  const y = parseInt(val);
+  return isNaN(y) ? 9999 : y;
+}
 export interface Pos { x: number; y: number; }
 
 export function computeLayout(
@@ -178,8 +187,8 @@ export function computeLayout(
 
     // Sort all children by birth year (oldest → leftmost); tiebreak by ID (Sheet row order)
     const sortedChildren = [...u.children].sort((a, b) => {
-      const ya = parseInt(people[a]?.birthYear || '9999');
-      const yb = parseInt(people[b]?.birthYear || '9999');
+      const ya = extractBirthYear(people[a]?.birthYear);
+      const yb = extractBirthYear(people[b]?.birthYear);
       return ya !== yb ? ya - yb : a - b;
     });
     const processedChildUs = new Set<string>();
