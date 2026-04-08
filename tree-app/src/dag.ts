@@ -116,6 +116,27 @@ export function assignGens(people: PersonMap, unions: Union[]): Record<number, n
   // Step 4: re-propagate after spouse normalization
   propagate();
 
+  // Step 5: backward pass — if a person was bumped above their natural
+  // parent-child generation by spouse normalization, shift ALL ancestors
+  // down by the same delta so siblings land on the same row.
+  Object.values(people).forEach(p => {
+    const parents = (p.pIds ?? []).filter(pid => ids.has(pid));
+    if (!parents.length) return;
+    const naturalChildGen = Math.max(...parents.map(pid => gen[pid] ?? 0)) + 1;
+    const delta = (gen[p.id] ?? 0) - naturalChildGen;
+    if (delta <= 0) return;
+    const queue = [...parents];
+    const visited = new Set<number>();
+    while (queue.length) {
+      const aid = queue.shift()!;
+      if (visited.has(aid)) continue;
+      visited.add(aid);
+      gen[aid] = (gen[aid] ?? 0) + delta;
+      (people[aid]?.pIds ?? []).filter(pid => ids.has(pid)).forEach(pid => queue.push(pid));
+    }
+  });
+  propagate();
+
   return gen;
 }
 
