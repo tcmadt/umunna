@@ -40,25 +40,25 @@ export default function App() {
   }, [isPrinting]);
 
   // Focus mode: compute visible set (±2 generations + spouses/co-parents)
+  // Compute full gens from all people (needed for generation-band focus filtering)
+  const fullGens = useMemo<Record<number, number>>(() => {
+    if (!Object.keys(people).length) return {};
+    const allUnions = deriveUnions(people);
+    return assignGens(people, allUnions);
+  }, [people]);
+
+  // Focus mode: show everyone within ±2 generation rows of the focus person.
+  // This naturally includes siblings (diff=0), parents (diff=1), grandparents (diff=2),
+  // children (diff=1), grandchildren (diff=2), and in-laws at the same row level.
   const visibleIds = useMemo<Set<number>>(() => {
     if (focusId === null) return new Set(Object.keys(people).map(Number));
-    const visible = new Set<number>();
-    visible.add(focusId);
-    // Up 2 gens
-    (people[focusId]?.pIds ?? []).forEach(pid => {
-      visible.add(pid);
-      (people[pid]?.pIds ?? []).forEach(gid => visible.add(gid));
-    });
-    // Down 2 gens + co-parents
-    Object.values(people).filter(p => p.pIds.includes(focusId)).forEach(child => {
-      visible.add(child.id);
-      child.pIds.forEach(pid => visible.add(pid)); // co-parents
-      Object.values(people).filter(p => p.pIds.includes(child.id)).forEach(gc => visible.add(gc.id));
-    });
-    // Spouses of all visible
-    [...visible].forEach(vid => (people[vid]?.sIds ?? []).forEach(sid => visible.add(sid)));
-    return visible;
-  }, [focusId, people]);
+    const targetGen = fullGens[focusId] ?? 0;
+    return new Set(
+      Object.entries(fullGens)
+        .filter(([, g]) => Math.abs(g - targetGen) <= 2)
+        .map(([id]) => Number(id))
+    );
+  }, [focusId, people, fullGens]);
 
   const focusPeople = useMemo<PersonMap>(() => {
     if (focusId === null) return people;
