@@ -4,7 +4,7 @@ import {
   deriveUnions, assignGens, computeLayout, getPaths,
   getAncestors, getDescendants,
 } from './dag';
-import type { Person } from './types';
+import type { Person, PersonMap } from './types';
 
 const NW = 110, NH = 36, GAPY = 160, PAD = 80, TOP_PAD = 60;
 
@@ -12,8 +12,6 @@ export default function App() {
   const { people, loading, error } = useSheetData(Infinity);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchIdx, setSearchIdx] = useState(0);
   // Pan/zoom state — null means "show full tree"
   const [vb, setVb] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [dragStart, setDragStart] = useState<{ mx: number; my: number; vx: number; vy: number } | null>(null);
@@ -30,6 +28,7 @@ export default function App() {
   const [historianMode, setHistorianMode] = useState(() => sessionStorage.getItem('umunna:historian') === '1');
   const [contributorMode, setContributorMode] = useState(() => sessionStorage.getItem('umunna:contributor') === '1');
   const [isPrinting, setIsPrinting] = useState(false);
+  const [focusId, setFocusId] = useState<number | null>(null);
   const isMobile = window.innerWidth < 640;
 
   useEffect(() => {
@@ -40,6 +39,34 @@ export default function App() {
     return () => window.removeEventListener('afterprint', done);
   }, [isPrinting]);
 
+  // Focus mode: compute visible set (±2 generations + spouses/co-parents)
+  const visibleIds = useMemo<Set<number>>(() => {
+    if (focusId === null) return new Set(Object.keys(people).map(Number));
+    const visible = new Set<number>();
+    visible.add(focusId);
+    // Up 2 gens
+    (people[focusId]?.pIds ?? []).forEach(pid => {
+      visible.add(pid);
+      (people[pid]?.pIds ?? []).forEach(gid => visible.add(gid));
+    });
+    // Down 2 gens + co-parents
+    Object.values(people).filter(p => p.pIds.includes(focusId)).forEach(child => {
+      visible.add(child.id);
+      child.pIds.forEach(pid => visible.add(pid)); // co-parents
+      Object.values(people).filter(p => p.pIds.includes(child.id)).forEach(gc => visible.add(gc.id));
+    });
+    // Spouses of all visible
+    [...visible].forEach(vid => (people[vid]?.sIds ?? []).forEach(sid => visible.add(sid)));
+    return visible;
+  }, [focusId, people]);
+
+  const focusPeople = useMemo<PersonMap>(() => {
+    if (focusId === null) return people;
+    return Object.fromEntries(
+      Object.entries(people).filter(([id]) => visibleIds.has(Number(id)))
+    ) as PersonMap;
+  }, [focusId, people, visibleIds]);
+
   const { unions, gens, pos, svgW, svgH, lanes } = useMemo(() => {
     const empty = {
       unions: [], gens: {} as Record<number, number>,
@@ -47,11 +74,11 @@ export default function App() {
       svgW: 800, svgH: 400,
       lanes: [] as { g: number; y: number; h: number }[],
     };
-    if (!Object.keys(people).length) return empty;
+    if (!Object.keys(focusPeople).length) return empty;
 
-    const unions = deriveUnions(people);
-    const gens = assignGens(people, unions);
-    const pos = computeLayout(people, unions, gens, NW, GAPY);
+    const unions = deriveUnions(focusPeople);
+    const gens = assignGens(focusPeople, unions);
+    const pos = computeLayout(focusPeople, unions, gens, NW, GAPY);
 
     Object.values(pos).forEach(p => { p.y += TOP_PAD; });
 
@@ -67,7 +94,7 @@ export default function App() {
     }));
 
     return { unions, gens, pos, svgW, svgH, lanes };
-  }, [people]);
+  }, [focusPeople]);
 
   // ── Dynamic lane labels relative to selected node ───────────────────────────
   function laneLabel(g: number): string {
@@ -190,6 +217,13 @@ export default function App() {
     setVb(computeReadableVb());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
+
+  // Reset view when focus changes
+  useEffect(() => {
+    if (!svgRef.current || !Object.keys(pos).length) return;
+    setVb(computeReadableVb());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
 
   // ── Non-passive wheel listener for zoom ─────────────────────────────────────
   useEffect(() => {
@@ -315,35 +349,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // ── Search ──────────────────────────────────────────────────────────────────
-  const searchHits = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return Object.values(people).filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.nicks.some(n => n.toLowerCase().includes(q))
-    ).map(p => p.id);
-  }, [searchQuery, people]);
-
-  function centerOn(id: number) {
-    const p = pos[id];
-    if (!p) return;
-    const el = svgRef.current;
-    const cw = el?.clientWidth  || 800;
-    const ch = el?.clientHeight || 400;
-    // Zoom in to ~2× the readable scale so the target node is prominent
-    const scale = (90 / NW) * 2;
-    const w = cw / scale;
-    const h = ch / scale;
-    setVb({ x: p.x - w / 2, y: p.y - h / 2, w, h });
-  }
-  function stepSearch(dir: 1 | -1) {
-    if (!searchHits.length) return;
-    const next = (searchIdx + dir + searchHits.length) % searchHits.length;
-    setSearchIdx(next);
-    centerOn(searchHits[next]);
-  }
-
   // ── Pan handlers ────────────────────────────────────────────────────────────
   function onSvgMouseDown(e: React.MouseEvent<SVGSVGElement>) {
     didDragRef.current = false;
@@ -424,23 +429,20 @@ export default function App() {
         <p style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1, margin: 0, flex: 1 }}>
           Hover to explore · click for bloodline
         </p>
-        {/* Search */}
+        {/* Focus dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="text"
-            placeholder="Search name…"
-            value={searchQuery}
-            onChange={e => { const q = e.target.value; setSearchQuery(q); setSearchIdx(0); if (q.trim()) { const hits = Object.values(people).filter(p => p.name.toLowerCase().includes(q.trim().toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(q.trim().toLowerCase()))).map(p => p.id); if (hits.length) centerOn(hits[0]); } else { setVb(computeReadableVb()); } }}
+          <label style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1 }}>FOCUS</label>
+          <select
+            value={focusId ?? ''}
+            onChange={e => { setFocusId(e.target.value ? Number(e.target.value) : null); setSelected(null); }}
             style={styles.searchInput}
-          />
-          {searchHits.length > 0 && (
-            <>
-              <span style={{ color: '#8A7060', fontSize: 10 }}>{searchIdx + 1}/{searchHits.length}</span>
-              <button onClick={() => stepSearch(-1)} style={styles.searchBtn}>‹</button>
-              <button onClick={() => stepSearch(1)} style={styles.searchBtn}>›</button>
-            </>
-          )}
-          <button onClick={() => { setVb(computeReadableVb()); setSearchQuery(''); }} style={styles.searchBtn} title="Reset view">⌂</button>
+          >
+            <option value="">All members</option>
+            {Object.values(people).sort((a, b) => a.name.localeCompare(b.name)).map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button onClick={() => { setFocusId(null); setSelected(null); setVb(computeReadableVb()); }} style={styles.searchBtn} title="Reset view">⌂</button>
         </div>
         {/* Suggest + button — contributors and historians only */}
         {(contributorMode || historianMode) && (
@@ -548,10 +550,6 @@ export default function App() {
               txtClr = '#8A7060';
             }
 
-            // Search hit glow (overrides dimming but not hover/bloodline)
-            const isSearchHit = searchHits.includes(person.id);
-            const isCurrentHit = searchHits[searchIdx] === person.id;
-
             if (!isPending && highlight) {
               if (highlight.mode === 'hover') {
                 if (person.id === highlight.id) {
@@ -588,8 +586,8 @@ export default function App() {
               >
                 <rect x={p.x - NW / 2} y={p.y - NH / 2} width={NW} height={NH} rx={5}
                   fill={fill}
-                  stroke={isCurrentHit ? '#F0E8D8' : isSearchHit ? '#E8BF60' : stroke}
-                  strokeWidth={isCurrentHit ? 3 : isSearchHit ? 2 : sw}
+                  stroke={stroke}
+                  strokeWidth={sw}
                   strokeDasharray={isPending ? '4,3' : 'none'}
                   opacity={nodeOpacity}
                   style={{ transition: 'all 0.2s' }} />
