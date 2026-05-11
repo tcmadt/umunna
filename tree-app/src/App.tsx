@@ -29,6 +29,7 @@ export default function App() {
   const [contributorMode, setContributorMode] = useState(() => sessionStorage.getItem('umunna:contributor') === '1');
   const [isPrinting, setIsPrinting] = useState(false);
   const [focusId, setFocusId] = useState<number | null>(null);
+  const [showMore, setShowMore] = useState(false);
   const isMobile = window.innerWidth < 640;
 
   useEffect(() => {
@@ -67,12 +68,11 @@ export default function App() {
     ) as PersonMap;
   }, [focusId, people, visibleIds]);
 
-  const { unions, gens, pos, svgW, svgH, lanes } = useMemo(() => {
+  const { unions, pos, svgW, svgH } = useMemo(() => {
     const empty = {
       unions: [], gens: {} as Record<number, number>,
       pos: {} as Record<number, { x: number; y: number }>,
       svgW: 800, svgH: 400,
-      lanes: [] as { g: number; y: number; h: number }[],
     };
     if (!Object.keys(focusPeople).length) return empty;
 
@@ -87,29 +87,8 @@ export default function App() {
     const svgW = Math.max(800, Math.max(...xs) + NW / 2 + PAD);
     const svgH = maxG * GAPY + NH + PAD + TOP_PAD * 2;
 
-    const lanes = Array.from({ length: maxG + 1 }, (_, g) => ({
-      g,
-      y: Math.max(0, g * GAPY - GAPY / 2 + TOP_PAD),
-      h: GAPY,
-    }));
-
-    return { unions, gens, pos, svgW, svgH, lanes };
+    return { unions, pos, svgW, svgH };
   }, [focusPeople]);
-
-  // ── Dynamic lane labels relative to selected node ───────────────────────────
-  function laneLabel(g: number): string {
-    if (selected === null) return '';
-    const diff = g - (gens[selected] ?? 0);
-    if (diff === 0) return '';
-    if (diff === -1) return 'PARENTS';
-    if (diff === -2) return 'GRANDPARENTS';
-    if (diff === -3) return 'GREAT-GRANDPARENTS';
-    if (diff < -3) return 'ANCESTORS';
-    if (diff === 1) return 'CHILDREN';
-    if (diff === 2) return 'GRANDCHILDREN';
-    if (diff === 3) return 'GREAT-GRANDCHILDREN';
-    return 'DESCENDANTS';
-  }
 
   // ── Highlight state ─────────────────────────────────────────────────────────
   // hover: 1-degree neighborhood; bloodline: full ancestor+descendant chain
@@ -158,6 +137,25 @@ export default function App() {
     }
     return s;
   }, [highlight, unions]);
+
+  // Immediate family of selected person — determines tier-2 nodes
+  const selectedFamily = useMemo(() => {
+    if (selected === null) return new Set<number>();
+    const s = new Set<number>();
+    const person = people[selected];
+    if (!person) return s;
+    person.pIds.forEach(id => s.add(id));
+    unions.forEach(u => {
+      if (u.spouses.includes(selected)) {
+        u.spouses.forEach(id => { if (id !== selected) s.add(id); });
+        u.children.forEach(id => s.add(id));
+      }
+      if (u.children.includes(selected)) {
+        u.children.forEach(id => { if (id !== selected) s.add(id); });
+      }
+    });
+    return s;
+  }, [selected, people, unions]);
 
   const hasHighlight = highlight !== null;
   const selectedPerson: Person | null = selected !== null ? (people[selected] ?? null) : null;
@@ -411,10 +409,10 @@ export default function App() {
   return (
     <div style={styles.page}>
 
-      {/* Slim header */}
-      {!isPrinting && <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', flexShrink: 0, flexWrap: 'wrap' }}>
+      {/* Header */}
+      {!isPrinting && <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 20px', flexShrink: 0 }}>
         <a href="/umunna/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', flexShrink: 0 }}>
-          <svg width="28" height="28" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
             <ellipse cx="16" cy="9.5" rx="5.5" ry="8" fill="#1C0E06" stroke="#D08A25" strokeWidth="1.5"/>
             <ellipse cx="16" cy="22.5" rx="5.5" ry="8" fill="#1C0E06" stroke="#B85E28" strokeWidth="1.5"/>
             <ellipse cx="9.5" cy="16" rx="8" ry="5.5" fill="#1C0E06" stroke="#D08A25" strokeWidth="1.5"/>
@@ -422,49 +420,45 @@ export default function App() {
             <circle cx="16" cy="16" r="3.5" fill="#E8BF60"/>
             <circle cx="16" cy="16" r="1.5" fill="#1C0E06"/>
           </svg>
-          <h1 style={{ color: '#F0E8D8', fontSize: 14, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
-            UMUNNA — FAMILY TREE
+          <h1 style={{ color: '#F0E8D8', fontSize: 13, letterSpacing: 4, fontWeight: 300, margin: 0, fontFamily: "'Fraunces', Georgia, serif" }}>
+            UMUNNA
           </h1>
         </a>
-        <p style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1, margin: 0, flex: 1 }}>
-          Hover to explore · click for bloodline
-        </p>
-        {/* Focus dropdown */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label style={{ color: '#8A7060', fontSize: 10, letterSpacing: 1 }}>FOCUS</label>
-          <select
-            value={focusId ?? ''}
-            onChange={e => { setFocusId(e.target.value ? Number(e.target.value) : null); setSelected(null); }}
-            style={styles.searchInput}
-          >
-            <option value="">All members</option>
-            {Object.values(people).sort((a, b) => a.name.localeCompare(b.name)).map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <button onClick={() => { setFocusId(null); setSelected(null); setVb(computeReadableVb()); }} style={styles.searchBtn} title="Reset view">⌂</button>
+        <div style={{ flex: 1 }} />
+        {/* Focus smart search */}
+        <FocusSearch
+          people={people}
+          focusId={focusId}
+          onChange={id => { setFocusId(id); setSelected(null); }}
+        />
+        {/* ⋯ more menu */}
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => setShowMore(m => !m)} style={styles.searchBtn} title="More">⋯</button>
+          {showMore && (
+            <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: '#1C0E06', border: '1px solid #3A1E0C', borderRadius: 6, padding: '6px 0', zIndex: 200, minWidth: 160 }}>
+              {!isMobile && (
+                <button onClick={() => { setIsPrinting(true); setShowMore(false); }}
+                  style={styles.moreItem}>⬇ Export PDF</button>
+              )}
+              {(contributorMode || historianMode) && (
+                <button onClick={() => { setShowSuggest(true); setShowMore(false); }}
+                  style={styles.moreItem}>＋ Suggest change</button>
+              )}
+              {historianMode && (
+                <div style={{ ...styles.moreItem, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#D08A25' }}>Historian</span>
+                  <button onClick={() => { setHistorianMode(false); sessionStorage.removeItem('umunna:historian'); setShowMore(false); }} style={styles.closeBtn}>✕</button>
+                </div>
+              )}
+              {contributorMode && !historianMode && (
+                <div style={{ ...styles.moreItem, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#52A86E' }}>Contributor</span>
+                  <button onClick={() => { setContributorMode(false); sessionStorage.removeItem('umunna:contributor'); setShowMore(false); }} style={styles.closeBtn}>✕</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {/* Suggest + button — contributors and historians only */}
-        {(contributorMode || historianMode) && (
-          <button onClick={() => setShowSuggest(true)} style={styles.suggestBtn}>Suggest +</button>
-        )}
-        {/* PDF export button — desktop only */}
-        {!isMobile && (
-          <button onClick={() => setIsPrinting(true)} style={styles.searchBtn} title="Export PDF">⬇ PDF</button>
-        )}
-        {/* Role badges */}
-        {historianMode && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#2a1a04', border: '1px solid #D08A25', borderRadius: 4, padding: '3px 10px' }}>
-            <span style={{ color: '#D08A25', fontSize: 10, letterSpacing: 1.5 }}>HISTORIAN</span>
-            <button onClick={() => { setHistorianMode(false); sessionStorage.removeItem('umunna:historian'); }} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
-          </div>
-        )}
-        {contributorMode && !historianMode && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1a1a04', border: '1px solid #52A86E', borderRadius: 4, padding: '3px 10px' }}>
-            <span style={{ color: '#52A86E', fontSize: 10, letterSpacing: 1.5 }}>CONTRIBUTOR</span>
-            <button onClick={() => { setContributorMode(false); sessionStorage.removeItem('umunna:contributor'); }} style={{ ...styles.closeBtn, fontSize: 10 }}>✕</button>
-          </div>
-        )}
       </div>}
 
       {/* Cancel button shown on-screen during print preview, hidden from actual print */}
@@ -492,19 +486,7 @@ export default function App() {
           onMouseUp={onSvgMouseUp}
           onMouseLeave={onSvgMouseUp}
         >
-          {/* Lane banding */}
-          {lanes.map((lane, i) => (
-            <g key={i}>
-              <rect x={0} y={lane.y} width={svgW} height={lane.h}
-                fill={i % 2 === 0 ? '#130A02' : '#0E0702'} />
-              <text x={10} y={lane.y + 14} fontSize={7.5} fill="#2a1408"
-                fontFamily="'Outfit', sans-serif" letterSpacing={1.5}>
-                {laneLabel(lane.g)}
-              </text>
-            </g>
-          ))}
-
-          {/* Union paths */}
+          {/* Union paths — monochromatic amber */}
           {unions.map(u => {
             if (u.spouses.some(s => hiddenIds.has(s))) return null;
             if (isPrinting && (u.spouses.some(s => people[s]?.pending) || u.children.some(c => people[c]?.pending))) return null;
@@ -513,70 +495,83 @@ export default function App() {
             const dimmed = hasHighlight && !isActive;
             return paths.map((p, i) => (
               <path key={`${u.id}-${i}`} d={p.d} fill="none"
-                stroke={dimmed ? '#1a0c02' : u.color}
+                stroke={dimmed ? '#1a0c02' : 'rgba(208,138,37,1)'}
                 strokeWidth={isActive
-                  ? (p.type === 'marriage' ? 2.5 : p.type === 'partner' ? 1.5 : 3)
-                  : (p.type === 'marriage' ? 1.5 : p.type === 'partner' ? 1 : 2)}
-                strokeDasharray={p.type === 'marriage' ? '5,4' : p.type === 'partner' ? '2,5' : 'none'}
-                strokeOpacity={dimmed ? 1 : p.type === 'partner' ? (isActive ? 0.65 : 0.4) : (isActive ? 1 : 0.65)}
-                style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }}
+                  ? (p.type === 'descent' ? 1.5 : 1)
+                  : (p.type === 'descent' ? 1 : 0.75)}
+                strokeDasharray={p.type === 'partner' ? '2,4' : 'none'}
+                strokeOpacity={dimmed ? 0.5 : p.type === 'partner' ? (isActive ? 0.5 : 0.25) : (isActive ? 0.8 : 0.3)}
+                style={{ transition: 'stroke-opacity 0.2s, stroke-width 0.2s' }}
               />
             ));
           })}
+          {/* Marriage diamonds */}
+          {unions.map(u => {
+            if (!u.married || u.spouses.length < 2) return null;
+            if (u.spouses.some(s => hiddenIds.has(s))) return null;
+            const sxs = u.spouses.map(s => pos[s]?.x).filter(x => x !== undefined) as number[];
+            const sys = u.spouses.map(s => pos[s]?.y).filter(y => y !== undefined) as number[];
+            if (sxs.length < 2) return null;
+            const bx = (Math.min(...sxs) + Math.max(...sxs)) / 2;
+            const by = sys[0];
+            const isActive = activePaths.has(u.id);
+            const dimmed = hasHighlight && !isActive;
+            const ds = 4;
+            return (
+              <polygon key={`d-${u.id}`}
+                points={`${bx},${by - ds} ${bx + ds},${by} ${bx},${by + ds} ${bx - ds},${by}`}
+                fill={dimmed ? '#1a0c02' : '#D08A25'}
+                opacity={dimmed ? 0.3 : isActive ? 0.9 : 0.55}
+                style={{ pointerEvents: 'none', transition: 'all 0.2s' }}
+              />
+            );
+          })}
 
-          {/* Person nodes */}
-          {Object.values(people).map(person => {
+          {/* Person nodes — circle portrait tiers */}
+          {Object.values(focusPeople).map(person => {
             const p = pos[person.id];
             if (!p) return null;
             if (hiddenIds.has(person.id)) return null;
             if (isPrinting && person.pending) return null;
             const isFemale = person.g === 'f';
             const isSelected = person.id === selected;
-
             const isPending = !!person.pending;
             const hasPendingEdit = !!person.pendingEdit;
 
-            // Base warm earthy colors
-            let fill   = isFemale ? '#160D05' : '#1C0E06';
+            // Tier: 1=subject, 2=immediate family, 3=everyone else
+            const tier = selected === null ? 2
+              : isSelected ? 1
+              : selectedFamily.has(person.id) ? 2
+              : 3;
+            const r = tier === 1 ? 26 : tier === 2 ? 18 : 10;
+
+            // Colors
+            let fill   = isFemale ? '#1a0f06' : '#1C0E06';
             let stroke = isFemale ? '#D08A25' : '#B85E28';
             let txtClr = isFemale ? '#F0E8D8' : '#E8BF60';
-            let nodeOpacity = 1;
-            let sw = isSelected ? 2.5 : 1;
+            let nodeOpacity = tier === 3 ? 0.7 : 1;
+            let sw = isSelected ? 2 : 1.5;
 
-            // Pending nodes get muted styling
-            if (isPending) {
-              fill = '#1a0f06';
-              stroke = '#6b4c2a';
-              txtClr = '#8A7060';
-            }
+            if (isPending) { fill = '#160c04'; stroke = '#4a3020'; txtClr = '#6b4c2a'; }
 
             if (!isPending && highlight) {
               if (highlight.mode === 'hover') {
-                if (person.id === highlight.id) {
-                  stroke = '#F0E8D8'; sw = 3;
-                } else if (highlight.spouseIds.has(person.id)) {
-                  stroke = '#D08A25'; sw = 2;
-                } else if (highlight.parentIds.has(person.id)) {
-                  stroke = '#B85E28'; sw = 2;
-                } else if (highlight.childIds.has(person.id)) {
-                  stroke = '#E8BF60'; sw = 2;
-                } else if (highlight.siblingIds.has(person.id)) {
-                  stroke = '#4AB8B0'; sw = 2;
-                } else {
-                  fill = '#0C0702'; stroke = '#1a0c02'; txtClr = '#3a2010'; nodeOpacity = 0.35;
-                }
-              } else { // bloodline
-                if (person.id === highlight.id) {
-                  fill = '#2a1a08'; stroke = '#F0E8D8'; sw = 3;
-                } else if (highlight.ancestors.has(person.id)) {
-                  stroke = '#D08A25'; sw = 2;
-                } else if (highlight.descendants.has(person.id)) {
-                  stroke = '#E8BF60'; sw = 2;
-                } else {
-                  fill = '#0C0702'; stroke = '#120a02'; txtClr = '#2a1808'; nodeOpacity = 0.18;
-                }
+                if (person.id === highlight.id) { stroke = '#F0E8D8'; sw = 2.5; }
+                else if (highlight.spouseIds.has(person.id)) { stroke = '#D08A25'; }
+                else if (highlight.parentIds.has(person.id)) { stroke = '#B85E28'; }
+                else if (highlight.childIds.has(person.id)) { stroke = '#E8BF60'; }
+                else if (highlight.siblingIds.has(person.id)) { stroke = '#4AB8B0'; }
+                else { nodeOpacity = 0.2; }
+              } else {
+                if (person.id === highlight.id) { fill = '#2a1a08'; stroke = '#F0E8D8'; sw = 2.5; }
+                else if (highlight.ancestors.has(person.id)) { stroke = '#D08A25'; }
+                else if (highlight.descendants.has(person.id)) { stroke = '#E8BF60'; }
+                else { nodeOpacity = 0.12; }
               }
             }
+
+            const firstName = person.name.split(' ')[0];
+            const monogram = person.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
             return (
               <g key={person.id} style={{ cursor: 'pointer' }}
@@ -584,52 +579,57 @@ export default function App() {
                 onMouseLeave={() => setHoveredPerson(null)}
                 onClick={() => { if (didDragRef.current) return; setSelected(isSelected ? null : person.id); }}
               >
-                <rect x={p.x - NW / 2} y={p.y - NH / 2} width={NW} height={NH} rx={5}
-                  fill={fill}
-                  stroke={stroke}
-                  strokeWidth={sw}
-                  strokeDasharray={isPending ? '4,3' : 'none'}
+                {/* Invisible hit target for small nodes */}
+                <circle cx={p.x} cy={p.y} r={Math.max(r, 14)} fill="transparent" />
+                {/* Circle */}
+                <circle cx={p.x} cy={p.y} r={r}
+                  fill={fill} stroke={stroke} strokeWidth={sw}
+                  strokeDasharray={isPending ? '3,2' : 'none'}
                   opacity={nodeOpacity}
-                  style={{ transition: 'all 0.2s' }} />
-                {person.photoUrl ? (
+                  style={{ transition: 'all 0.25s' }} />
+                {/* Photo */}
+                {person.photoUrl && (
                   <>
                     <clipPath id={`clip-${person.id}`}>
-                      <circle cx={p.x - NW / 2 + 18} cy={p.y} r={12} />
+                      <circle cx={p.x} cy={p.y} r={r - 1} />
                     </clipPath>
-                    <image
-                      href={person.photoUrl}
-                      x={p.x - NW / 2 + 6} y={p.y - 12} width={24} height={24}
+                    <image href={person.photoUrl}
+                      x={p.x - r} y={p.y - r} width={r * 2} height={r * 2}
                       clipPath={`url(#clip-${person.id})`}
                       preserveAspectRatio="xMidYMid slice"
                       opacity={nodeOpacity}
-                      onError={(e) => { (e.target as SVGImageElement).style.display = 'none'; }}
-                    />
-                    <text x={p.x - NW / 2 + 34} y={p.y} dominantBaseline="middle"
-                      fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
-                      opacity={nodeOpacity}
-                      style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
-                      {person.name.split(' ')[0]}
-                    </text>
+                      onError={e => { (e.target as SVGImageElement).style.display = 'none'; }} />
                   </>
-                ) : (
+                )}
+                {/* Monogram or first name inside circle (no photo) */}
+                {!person.photoUrl && (
                   <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                    fontSize={9} fill={txtClr} fontFamily="'Outfit', sans-serif"
+                    fontSize={tier === 1 ? 13 : tier === 2 ? 9 : 7}
+                    fill={txtClr} fontFamily="'Outfit', sans-serif"
                     opacity={nodeOpacity}
-                    style={{ transition: 'fill 0.2s, opacity 0.2s', pointerEvents: 'none' }}>
-                    {person.name.split(' ')[0]}
+                    style={{ pointerEvents: 'none', transition: 'opacity 0.25s' }}>
+                    {tier === 3 ? monogram : firstName}
                   </text>
                 )}
-                {/* Pending "?" badge */}
-                {isPending && (
-                  <text x={p.x + NW / 2 - 6} y={p.y - NH / 2 + 8} fontSize={8} fill="#6b4c2a"
-                    textAnchor="middle" dominantBaseline="middle"
-                    style={{ pointerEvents: 'none' }}>?</text>
+                {/* Name label below circle for tiers 1 and 2 */}
+                {tier <= 2 && (
+                  <text x={p.x} y={p.y + r + (tier === 1 ? 13 : 10)}
+                    textAnchor="middle" fontSize={tier === 1 ? 11 : 9}
+                    fill={txtClr} fontFamily="'Outfit', sans-serif"
+                    opacity={nodeOpacity}
+                    style={{ pointerEvents: 'none', transition: 'opacity 0.25s' }}>
+                    {firstName}
+                  </text>
                 )}
-                {/* Pending edit orange dot */}
+                {/* Pending ? */}
+                {isPending && (
+                  <text x={p.x + r - 3} y={p.y - r + 5} fontSize={7} fill="#6b4c2a"
+                    textAnchor="middle" style={{ pointerEvents: 'none' }}>?</text>
+                )}
+                {/* Pending edit dot */}
                 {hasPendingEdit && !isPending && (
-                  <circle cx={p.x + NW / 2 - 5} cy={p.y - NH / 2 + 5} r={4}
-                    fill="#D08A25" opacity={0.9}
-                    style={{ pointerEvents: 'none' }} />
+                  <circle cx={p.x + r - 3} cy={p.y - r + 3} r={3}
+                    fill="#D08A25" opacity={0.9} style={{ pointerEvents: 'none' }} />
                 )}
               </g>
             );
@@ -682,36 +682,38 @@ function InfoPanel({ person, people, onClose, historianMode, onApprove, onReject
 
   return (
     <div style={styles.panel}>
-      <div style={{ ...styles.panelHead, borderBottom: `1px solid ${accent}44` }}>
-        <div>
-          {person.photoUrl ? (
-            <img src={person.photoUrl} alt={person.name}
-              style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', marginBottom: 8, border: `2px solid ${accent}` }} />
-          ) : (
-            <div style={{ fontSize: 24, marginBottom: 4 }}>{isFemale ? '👩🏾' : '👨🏾'}</div>
-          )}
-          <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 15, color: accent }}>
-            {person.name}
+      {person.photoUrl ? (
+        <div style={{ position: 'relative', height: 160, overflow: 'hidden', borderBottom: `1px solid ${accent}33` }}>
+          <img src={person.photoUrl} alt={person.name}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, transparent 30%, rgba(12,7,2,0.95) 100%)' }} />
+          <div style={{ position: 'absolute', bottom: 12, left: 16, right: 36 }}>
+            <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 17, color: '#F0E8D8', lineHeight: 1.2 }}>{person.name}</div>
+            {person.nicks.length > 0 && (
+              <div style={{ fontSize: 10, color: '#8A7060', fontStyle: 'italic', marginTop: 3 }}>"{person.nicks.join(', ')}"</div>
+            )}
           </div>
-          {person.nicks.length > 0 && (
-            <div style={{ fontSize: 11, color: '#6b4c2a', fontStyle: 'italic', marginTop: 2 }}>
-              "{person.nicks.join(', ')}"
-            </div>
-          )}
-          {/* Pending suggestion label */}
-          {person.pending && (
-            <div style={{ fontSize: 10, color: '#D08A25', letterSpacing: 1.2, marginTop: 4, textTransform: 'uppercase' }}>
-              Pending Suggestion
-            </div>
-          )}
-          {person.submittedBy && (
-            <div style={{ fontSize: 10, color: '#6b4c2a', marginTop: 2 }}>
-              {person.pending ? 'Suggested' : 'Added'} by: {people[Number(person.submittedBy)]?.name ?? person.submittedBy}
-            </div>
-          )}
+          <button onClick={onClose} style={{ ...styles.closeBtn, position: 'absolute', top: 10, right: 10 }}>✕</button>
         </div>
-        <button onClick={onClose} style={styles.closeBtn}>✕</button>
-      </div>
+      ) : (
+        <div style={{ ...styles.panelHead, borderBottom: `1px solid ${accent}44` }}>
+          <div>
+            <div style={{ fontSize: 28, marginBottom: 4 }}>{isFemale ? '👩🏾' : '👨🏾'}</div>
+            <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 15, color: accent }}>{person.name}</div>
+            {person.nicks.length > 0 && (
+              <div style={{ fontSize: 11, color: '#6b4c2a', fontStyle: 'italic', marginTop: 2 }}>"{person.nicks.join(', ')}"</div>
+            )}
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+        </div>
+      )}
+      {/* Pending / submittedBy labels */}
+      {(person.pending || person.submittedBy) && (
+        <div style={{ padding: '6px 16px 0', fontSize: 10 }}>
+          {person.pending && <div style={{ color: '#D08A25', letterSpacing: 1.2, textTransform: 'uppercase' }}>Pending Suggestion</div>}
+          {person.submittedBy && <div style={{ color: '#6b4c2a', marginTop: 2 }}>{person.pending ? 'Suggested' : 'Added'} by: {people[Number(person.submittedBy)]?.name ?? person.submittedBy}</div>}
+        </div>
+      )}
       <div style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.9, color: '#8A7060', fontFamily: "'Outfit', sans-serif" }}>
         {(person.birthDate || person.birthYear) && <div><span style={styles.lbl}>Born</span>{person.birthDate ?? person.birthYear}</div>}
         {(person.deathDate || person.deathYear) && <div><span style={styles.lbl}>Died</span>{person.deathDate ?? person.deathYear}</div>}
@@ -1046,6 +1048,60 @@ function SuggestModal({ people, onClose }: { people: Record<number, Person>; onC
   );
 }
 
+// ── FocusSearch ───────────────────────────────────────────────────────────────
+function FocusSearch({ people, focusId, onChange }: {
+  people: PersonMap;
+  focusId: number | null;
+  onChange: (id: number | null) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const focusPerson = focusId !== null ? people[focusId] : null;
+  const sorted = Object.values(people).filter(p => !p.pending).sort((a, b) => a.name.localeCompare(b.name));
+  const filtered = focusPerson ? sorted : query
+    ? sorted.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.nicks.some(n => n.toLowerCase().includes(query.toLowerCase())))
+    : sorted;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        value={focusPerson ? focusPerson.name : query}
+        onChange={e => { setQuery(e.target.value); onChange(null); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="Search name…"
+        style={{ ...styles.searchInput, paddingRight: 28 }}
+      />
+      {focusPerson && (
+        <button onMouseDown={() => { onChange(null); setQuery(''); }}
+          style={{ position: 'absolute', right: 18, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b4c2a', cursor: 'pointer', fontSize: 10, lineHeight: 1, padding: 0 }}>
+          ✕
+        </button>
+      )}
+      <button onMouseDown={() => setOpen(o => !o)}
+        style={{ position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#8A7060', cursor: 'pointer', fontSize: 9, lineHeight: 1, padding: 0 }}>
+        ▾
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 2, background: '#1C0E06', border: '1px solid #3A1E0C', borderRadius: 4, maxHeight: 220, overflowY: 'auto', zIndex: 300 }}>
+          <div onMouseDown={() => { onChange(null); setQuery(''); setOpen(false); }}
+            style={{ padding: '6px 10px', color: '#6b4c2a', fontSize: 11, cursor: 'pointer', fontFamily: "'Outfit', sans-serif", borderBottom: '1px solid #2a1408', fontStyle: 'italic' }}>
+            All members
+          </div>
+          {filtered.slice(0, 60).map(p => (
+            <div key={p.id} onMouseDown={() => { onChange(p.id); setQuery(''); setOpen(false); }}
+              style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 11, fontFamily: "'Outfit', sans-serif", color: p.id === focusId ? '#D08A25' : '#F0E8D8', background: p.id === focusId ? '#2a1408' : 'transparent' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#2a1408')}
+              onMouseLeave={e => (e.currentTarget.style.background = p.id === focusId ? '#2a1408' : 'transparent')}>
+              {p.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModalField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -1163,6 +1219,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#1C0E06', border: '1px solid #D08A25', borderRadius: 4,
     color: '#D08A25', cursor: 'pointer', fontSize: 11, padding: '4px 10px',
     fontFamily: "'Outfit', sans-serif", letterSpacing: 0.5,
+  },
+  moreItem: {
+    display: 'block', width: '100%', textAlign: 'left' as const,
+    background: 'none', border: 'none', color: '#F0E8D8', cursor: 'pointer',
+    fontSize: 11, padding: '7px 14px', fontFamily: "'Outfit', sans-serif",
   },
   approveBtn: {
     background: '#1a3a1a', border: '1px solid #52A86E', borderRadius: 4,
