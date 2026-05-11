@@ -76,16 +76,20 @@ export default function App() {
     };
     if (!Object.keys(focusPeople).length) return empty;
 
+    const isFocused = focusId !== null;
+    const layoutNW   = isFocused ? 160 : NW;
+    const layoutGAPY = isFocused ? 220 : GAPY;
+
     const unions = deriveUnions(focusPeople);
     const gens = assignGens(focusPeople, unions);
-    const pos = computeLayout(focusPeople, unions, gens, NW, GAPY);
+    const pos = computeLayout(focusPeople, unions, gens, layoutNW, layoutGAPY);
 
     Object.values(pos).forEach(p => { p.y += TOP_PAD; });
 
     const maxG = Math.max(...Object.values(gens), 0);
     const xs = Object.values(pos).map(p => p.x);
-    const svgW = Math.max(800, Math.max(...xs) + NW / 2 + PAD);
-    const svgH = maxG * GAPY + NH + PAD + TOP_PAD * 2;
+    const svgW = Math.max(800, Math.max(...xs) + layoutNW / 2 + PAD);
+    const svgH = maxG * layoutGAPY + NH + PAD + TOP_PAD * 2;
 
     return { unions, pos, svgW, svgH };
   }, [focusPeople]);
@@ -197,9 +201,10 @@ export default function App() {
     const el = svgRef.current;
     const cw = el?.clientWidth  || 800;
     const ch = el?.clientHeight || 400;
-    const MIN_NODE_PX = 70;
+    const MIN_NODE_PX = focusId !== null ? 95 : 70;
+    const layoutNW = focusId !== null ? 160 : NW;
     const fitScale   = Math.min(cw / svgW, ch / svgH);
-    const scale      = Math.max(fitScale, MIN_NODE_PX / NW);
+    const scale      = Math.max(fitScale, MIN_NODE_PX / layoutNW);
     const vbW = cw / scale;
     const vbH = ch / scale;
     const xs = Object.values(pos).map(p => p.x);
@@ -208,6 +213,14 @@ export default function App() {
     const cy = ys.length ? (Math.min(...ys) + Math.max(...ys)) / 2 : svgH / 2;
     return { x: cx - vbW / 2, y: cy - vbH / 2, w: vbW, h: vbH };
   }
+
+  // Default focus to Tobechukwu on first load
+  useEffect(() => {
+    if (!Object.keys(people).length || focusId !== null) return;
+    const tobe = Object.values(people).find(p => p.name.toLowerCase().includes('tobechukwu'));
+    if (tobe) setFocusId(tobe.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [people]);
 
   // Set readable initial viewBox once data is loaded
   useEffect(() => {
@@ -493,17 +506,19 @@ export default function App() {
             const paths = getPaths(u, pos);
             const isActive = activePaths.has(u.id);
             const dimmed = hasHighlight && !isActive;
-            return paths.map((p, i) => (
-              <path key={`${u.id}-${i}`} d={p.d} fill="none"
-                stroke={dimmed ? '#1a0c02' : 'rgba(208,138,37,1)'}
-                strokeWidth={isActive
-                  ? (p.type === 'descent' ? 1.5 : 1)
-                  : (p.type === 'descent' ? 1 : 0.75)}
-                strokeDasharray={p.type === 'partner' ? '2,4' : 'none'}
-                strokeOpacity={dimmed ? 0.5 : p.type === 'partner' ? (isActive ? 0.5 : 0.25) : (isActive ? 0.8 : 0.3)}
-                style={{ transition: 'stroke-opacity 0.2s, stroke-width 0.2s' }}
-              />
-            ));
+            return paths.map((p, i) => {
+              const isMarriage = p.type === 'marriage';
+              const isPartner  = p.type === 'partner';
+              return (
+                <path key={`${u.id}-${i}`} d={p.d} fill="none"
+                  stroke={dimmed ? '#1a0c02' : 'rgba(208,138,37,1)'}
+                  strokeWidth={isMarriage ? 0.75 : isActive ? 1.5 : 1}
+                  strokeDasharray={isPartner ? '2,4' : 'none'}
+                  strokeOpacity={dimmed ? 0.3 : isMarriage ? 0.2 : isPartner ? (isActive ? 0.55 : 0.28) : (isActive ? 0.85 : 0.5)}
+                  style={{ transition: 'stroke-opacity 0.2s, stroke-width 0.2s' }}
+                />
+              );
+            });
           })}
           {/* Marriage diamonds */}
           {unions.map(u => {
@@ -543,7 +558,12 @@ export default function App() {
               : isSelected ? 1
               : selectedFamily.has(person.id) ? 2
               : 3;
-            const r = tier === 1 ? 26 : tier === 2 ? 18 : 10;
+            const focused = focusId !== null;
+            const r = selected === null
+              ? (focused ? 26 : 20)
+              : tier === 1 ? (focused ? 34 : 28)
+              : tier === 2 ? (focused ? 26 : 20)
+              : (focused ? 14 : 12);
 
             // Colors
             let fill   = isFemale ? '#1a0f06' : '#1C0E06';
@@ -571,7 +591,6 @@ export default function App() {
             }
 
             const firstName = person.name.split(' ')[0];
-            const monogram = person.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
             return (
               <g key={person.id} style={{ cursor: 'pointer' }}
@@ -601,22 +620,23 @@ export default function App() {
                       onError={e => { (e.target as SVGImageElement).style.display = 'none'; }} />
                   </>
                 )}
-                {/* Monogram or first name inside circle (no photo) */}
+                {/* Initial letter inside circle — always, no photo needed */}
                 {!person.photoUrl && (
                   <text x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle"
-                    fontSize={tier === 1 ? 13 : tier === 2 ? 9 : 7}
-                    fill={txtClr} fontFamily="'Outfit', sans-serif"
+                    fontSize={Math.round(r * 0.7)}
+                    fill={stroke}
+                    fontFamily="'Fraunces', Georgia, serif" fontWeight="300"
                     opacity={nodeOpacity}
                     style={{ pointerEvents: 'none', transition: 'opacity 0.25s' }}>
-                    {tier === 3 ? monogram : firstName}
+                    {person.name[0]?.toUpperCase() ?? '?'}
                   </text>
                 )}
-                {/* Name label below circle for tiers 1 and 2 */}
-                {tier <= 2 && (
-                  <text x={p.x} y={p.y + r + (tier === 1 ? 13 : 10)}
-                    textAnchor="middle" fontSize={tier === 1 ? 11 : 9}
+                {/* First name below circle — only when circle is large enough */}
+                {r >= 20 && (
+                  <text x={p.x} y={p.y + r + 12}
+                    textAnchor="middle" fontSize={Math.max(8, Math.min(11, Math.round(r * 0.38)))}
                     fill={txtClr} fontFamily="'Outfit', sans-serif"
-                    opacity={nodeOpacity}
+                    opacity={nodeOpacity * 0.9}
                     style={{ pointerEvents: 'none', transition: 'opacity 0.25s' }}>
                     {firstName}
                   </text>
