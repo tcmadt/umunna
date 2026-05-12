@@ -236,6 +236,66 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId]);
 
+  // Smooth animated viewBox transition (400ms ease-in-out)
+  const animRef = useRef<number | null>(null);
+  function animateTo(target: { x: number; y: number; w: number; h: number }) {
+    if (animRef.current !== null) cancelAnimationFrame(animRef.current);
+    const start = vbRef.current ?? target;
+    const duration = 400;
+    const t0 = performance.now();
+    function ease(t: number) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
+    function step(now: number) {
+      const raw = Math.min((now - t0) / duration, 1);
+      const e = ease(raw);
+      const v = {
+        x: start.x + (target.x - start.x) * e,
+        y: start.y + (target.y - start.y) * e,
+        w: start.w + (target.w - start.w) * e,
+        h: start.h + (target.h - start.h) * e,
+      };
+      vbRef.current = v;
+      svgRef.current?.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
+      if (raw < 1) { animRef.current = requestAnimationFrame(step); }
+      else { setVb(v); animRef.current = null; }
+    }
+    animRef.current = requestAnimationFrame(step);
+  }
+
+  // Zoom to immediate family bounding box when someone is selected
+  useEffect(() => {
+    if (!svgRef.current) return;
+    if (selected === null) {
+      animateTo(computeReadableVb());
+      return;
+    }
+    // Collect positions of selected person + their immediate family
+    const familyIds = new Set([selected, ...selectedFamily]);
+    const pts = [...familyIds].map(id => pos[id]).filter(Boolean) as { x: number; y: number }[];
+    if (!pts.length) return;
+
+    const xs = pts.map(p => p.x);
+    const ys = pts.map(p => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const el = svgRef.current;
+    const cw = el.clientWidth  || 800;
+    const ch = el.clientHeight || 400;
+    const margin = 120; // SVG-space padding around the group
+    const contentW = (maxX - minX) + margin * 2;
+    const contentH = (maxY - minY) + margin * 2;
+    const scale = Math.min(cw / contentW, ch / contentH);
+    const vbW = cw / scale;
+    const vbH = ch / scale;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    animateTo({ x: cx - vbW / 2, y: cy - vbH / 2, w: vbW, h: vbH });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
   // ── Non-passive wheel listener for zoom ─────────────────────────────────────
   useEffect(() => {
     const el = svgRef.current;
