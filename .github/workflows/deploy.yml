@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main, feature/design-portrait]
+    branches: [main, feature/design-portrait, feature/selection-family-view]
 
 permissions:
   contents: write
