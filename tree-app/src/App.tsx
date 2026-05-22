@@ -2,7 +2,6 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { useSheetData, ENDPOINT_URL } from './useSheetData';
 import {
   deriveUnions, assignGens, computeLayout, getPaths,
-  getAncestors, getDescendants,
 } from './dag';
 import type { Person, PersonMap } from './types';
 
@@ -40,17 +39,18 @@ export default function App() {
     return () => window.removeEventListener('afterprint', done);
   }, [isPrinting]);
 
-  // Focus mode: compute visible set (±2 generations + spouses/co-parents)
-  // Compute full gens from all people (needed for generation-band focus filtering)
-  const fullGens = useMemo<Record<number, number>>(() => {
-    if (!Object.keys(people).length) return {};
-    const allUnions = deriveUnions(people);
-    return assignGens(people, allUnions);
+  // Full unions + gens from all people (used for focus filtering + selection traversal)
+  const fullUnions = useMemo(() => {
+    if (!Object.keys(people).length) return [];
+    return deriveUnions(people);
   }, [people]);
 
+  const fullGens = useMemo<Record<number, number>>(() => {
+    if (!Object.keys(people).length) return {};
+    return assignGens(people, fullUnions);
+  }, [people, fullUnions]);
+
   // Focus mode: show everyone within ±2 generation rows of the focus person.
-  // This naturally includes siblings (diff=0), parents (diff=1), grandparents (diff=2),
-  // children (diff=1), grandchildren (diff=2), and in-laws at the same row level.
   const visibleIds = useMemo<Set<number>>(() => {
     if (focusId === null) return new Set(Object.keys(people).map(Number));
     const targetGen = fullGens[focusId] ?? 0;
@@ -68,41 +68,150 @@ export default function App() {
     ) as PersonMap;
   }, [focusId, people, visibleIds]);
 
-  const { unions, pos, svgW, svgH } = useMemo(() => {
-    const empty = {
-      unions: [], gens: {} as Record<number, number>,
-      pos: {} as Record<number, { x: number; y: number }>,
-      svgW: 800, svgH: 400,
+  // Selection family: the exact set of people shown when someone is selected.
+  // Includes: parents, siblings, siblings' spouses + their children (nephews/nieces),
+  // own spouses + own children.
+  const selectionVisible = useMemo<Set<number>>(() => {
+    if (selected === null) return new Set();
+    const result = new Set<number>([selected]);
+    const person = people[selected];
+    if (!person) return result;
+
+    // Parents
+    person.pIds.forEach(id => { if (people[id]) result.add(id); });
+
+    // Own spouses + own children
+    fullUnions.forEach(u => {
+      if (u.spouses.includes(selected)) {
+        u.spouses.forEach(id => { if (people[id]) result.add(id); });
+        u.children.forEach(id => { if (people[id]) result.add(id); });
+      }
+    });
+
+    // Siblings (from parent unions)
+    const siblings = new Set<number>();
+    fullUnions.forEach(u => {
+      if (u.children.includes(selected)) {
+        u.children.forEach(id => {
+          if (id !== selected && people[id]) { result.add(id); siblings.add(id); }
+        });
+      }
+    });
+
+    // Siblings' spouses + nephews/nieces
+    fullUnions.forEach(u => {
+      if (u.spouses.some(s => siblings.has(s))) {
+        u.spouses.forEach(id => { if (people[id]) result.add(id); });
+        u.children.forEach(id => { if (people[id]) result.add(id); });
+      }
+    });
+
+    return result;
+  }, [selected, people, fullUnions]);
+
+  // displayPeople: what's actually rendered — selection family view or focus band
+  const displayPeople = useMemo<PersonMap>(() => {
+    if (selected === null) return focusPeople;
+    return Object.fromEntries(
+      Object.entries(people).filter(([id]) => selectionVisible.has(Number(id)))
+    ) as PersonMap;
+  }, [selected, people, focusPeople, selectionVisible]);
+
+  const { unions, pos, svgW, svgH, nodeRadius } = useMemo(() => {
+    type LayoutResult = {
+      unions: ReturnType<typeof deriveUnions>;
+      pos: Record<number, { x: number; y: number }>;
+      svgW: number; svgH: number;
+      nodeRadius: Record<number, number>;
     };
-    if (!Object.keys(focusPeople).length) return empty;
+    const empty: LayoutResult = {
+      unions: [], pos: {}, svgW: 800, svgH: 400, nodeRadius: {},
+    };
+    if (!Object.keys(displayPeople).length) return empty;
 
     const isFocused = focusId !== null;
+
+    if (selected !== null) {
+      // ── Selection mode: dynamic sizing based on screen thirds ──────────────
+      const screenW = svgRef.current?.clientWidth  || window.innerWidth;
+      const screenH = svgRef.current?.clientHeight || (window.innerHeight - 44);
+      const rowH    = screenH / 3;
+
+      const selUnions = deriveUnions(displayPeople);
+      const selGens   = assignGens(displayPeople, selUnions);
+      const selectedGen = selGens[selected] ?? 0;
+
+      // Bucket node IDs by generation relative to selected
+      const genGroups: Record<number, number[]> = {};
+      Object.values(displayPeople).forEach(p => {
+        const rel = (selGens[p.id] ?? 0) - selectedGen;
+        if (!genGroups[rel]) genGroups[rel] = [];
+        genGroups[rel].push(p.id);
+      });
+
+      const nParent = genGroups[-1]?.length ?? 0;
+      const nMid    = genGroups[0]?.length  ?? 1;
+      const nBottom = genGroups[1]?.length  ?? 0;
+
+      // Bottom-up sizing: densest row drives the horizontal grid
+      const refN   = nBottom > 0 ? nBottom : nMid;
+      const r_ref  = Math.min(screenW / (refN * 2.8), rowH * 0.38);
+      const layoutNW   = r_ref * 2 + 24;
+      const layoutGAPY = rowH;
+
+      const r_bottom = nBottom > 0 ? r_ref : 0;
+      const r_mid    = nBottom > 0
+        ? Math.min(layoutNW * 0.42, rowH * 0.38)
+        : r_ref;
+      const r_parent = nParent > 0
+        ? Math.min((screenW / 3) / (nParent * 2), rowH * 0.38)
+        : r_mid * 1.3;
+
+      const nodeRadius: Record<number, number> = {};
+      Object.values(displayPeople).forEach(p => {
+        const rel = (selGens[p.id] ?? 0) - selectedGen;
+        nodeRadius[p.id] = rel < 0 ? r_parent : rel === 0 ? r_mid : r_bottom;
+      });
+
+      const pos = computeLayout(displayPeople, selUnions, selGens, layoutNW, layoutGAPY);
+      Object.values(pos).forEach(p => { p.y += TOP_PAD; });
+
+      const xs = Object.values(pos).map(p => p.x);
+      const ys = Object.values(pos).map(p => p.y);
+      const svgW = Math.max(screenW, Math.max(...xs) + layoutNW / 2 + PAD);
+      const svgH = Math.max(400, Math.max(...ys) + r_bottom + 40 + PAD);
+
+      return { unions: selUnions, pos, svgW, svgH, nodeRadius };
+    }
+
+    // ── Non-selection mode: existing focus-band behaviour ───────────────────
     const layoutNW   = isFocused ? 160 : NW;
     const layoutGAPY = isFocused ? 220 : GAPY;
-
-    const unions = deriveUnions(focusPeople);
-    const gens = assignGens(focusPeople, unions);
-    const pos = computeLayout(focusPeople, unions, gens, layoutNW, layoutGAPY);
-
+    const unions  = deriveUnions(displayPeople);
+    const gens    = assignGens(displayPeople, unions);
+    const pos     = computeLayout(displayPeople, unions, gens, layoutNW, layoutGAPY);
     Object.values(pos).forEach(p => { p.y += TOP_PAD; });
 
     const maxG = Math.max(...Object.values(gens), 0);
-    const xs = Object.values(pos).map(p => p.x);
+    const xs   = Object.values(pos).map(p => p.x);
     const svgW = Math.max(800, Math.max(...xs) + layoutNW / 2 + PAD);
     const svgH = maxG * layoutGAPY + NH + PAD + TOP_PAD * 2;
 
-    return { unions, pos, svgW, svgH };
-  }, [focusPeople]);
+    const defaultR = isFocused ? 26 : 20;
+    const nodeRadius: Record<number, number> = {};
+    Object.values(displayPeople).forEach(p => { nodeRadius[p.id] = defaultR; });
 
-  // ── Highlight state ─────────────────────────────────────────────────────────
-  // hover: 1-degree neighborhood; bloodline: full ancestor+descendant chain
+    return { unions, pos, svgW, svgH, nodeRadius };
+  }, [displayPeople, selected, focusId]);
+
+  // ── Highlight state (hover only — no bloodline dimming in family view) ──────
   const highlight = useMemo(() => {
     if (hoveredPerson !== null) {
       const person = people[hoveredPerson];
       if (!person) return null;
-      const spouseIds = new Set<number>();
-      const parentIds = new Set<number>(person.pIds);
-      const childIds = new Set<number>();
+      const spouseIds  = new Set<number>();
+      const parentIds  = new Set<number>(person.pIds);
+      const childIds   = new Set<number>();
       const siblingIds = new Set<number>();
       unions.forEach(u => {
         if (u.spouses.includes(hoveredPerson)) {
@@ -115,51 +224,17 @@ export default function App() {
       });
       return { mode: 'hover' as const, id: hoveredPerson, spouseIds, parentIds, childIds, siblingIds };
     }
-    if (selected !== null) {
-      return {
-        mode: 'bloodline' as const,
-        id: selected,
-        ancestors: getAncestors(selected, people),
-        descendants: getDescendants(selected, unions),
-      };
-    }
     return null;
-  }, [hoveredPerson, selected, people, unions]);
+  }, [hoveredPerson, people, unions]);
 
   const activePaths = useMemo(() => {
     const s = new Set<string>();
     if (!highlight) return s;
-    if (highlight.mode === 'hover') {
-      unions.forEach(u => {
-        if (u.spouses.includes(highlight.id) || u.children.includes(highlight.id)) s.add(u.id);
-      });
-    } else {
-      const blood = new Set([highlight.id, ...highlight.ancestors, ...highlight.descendants]);
-      unions.forEach(u => {
-        if (u.spouses.some(id => blood.has(id)) || u.children.some(id => blood.has(id))) s.add(u.id);
-      });
-    }
-    return s;
-  }, [highlight, unions]);
-
-  // Immediate family of selected person — determines tier-2 nodes
-  const selectedFamily = useMemo(() => {
-    if (selected === null) return new Set<number>();
-    const s = new Set<number>();
-    const person = people[selected];
-    if (!person) return s;
-    person.pIds.forEach(id => s.add(id));
     unions.forEach(u => {
-      if (u.spouses.includes(selected)) {
-        u.spouses.forEach(id => { if (id !== selected) s.add(id); });
-        u.children.forEach(id => s.add(id));
-      }
-      if (u.children.includes(selected)) {
-        u.children.forEach(id => { if (id !== selected) s.add(id); });
-      }
+      if (u.spouses.includes(highlight.id) || u.children.includes(highlight.id)) s.add(u.id);
     });
     return s;
-  }, [selected, people, unions]);
+  }, [highlight, unions]);
 
   const hasHighlight = highlight !== null;
   const selectedPerson: Person | null = selected !== null ? (people[selected] ?? null) : null;
@@ -180,11 +255,12 @@ export default function App() {
   }, [people, unions]);
 
   const hiddenIds = useMemo(() => {
+    // In selection mode displayPeople is already the explicit visible set — don't hide further
+    if (selected !== null) return new Set<number>();
     const result = new Set(hiddenByDefault);
-    const revealFor = hoveredPerson ?? selected;
-    if (revealFor !== null) {
+    if (hoveredPerson !== null) {
       unions.forEach(u => {
-        if (u.spouses.includes(revealFor))
+        if (u.spouses.includes(hoveredPerson))
           u.spouses.forEach(s => result.delete(s));
       });
     }
@@ -261,37 +337,28 @@ export default function App() {
     animRef.current = requestAnimationFrame(step);
   }
 
-  // Zoom to immediate family bounding box when someone is selected
+  // Zoom to the full selection family view when someone is selected
   useEffect(() => {
     if (!svgRef.current) return;
-    if (selected === null) {
-      animateTo(computeReadableVb());
-      return;
-    }
-    // Collect positions of selected person + their immediate family
-    const familyIds = new Set([selected, ...selectedFamily]);
-    const pts = [...familyIds].map(id => pos[id]).filter(Boolean) as { x: number; y: number }[];
+    if (selected === null) { animateTo(computeReadableVb()); return; }
+
+    const pts = Object.keys(displayPeople)
+      .map(id => pos[Number(id)]).filter(Boolean) as { x: number; y: number }[];
     if (!pts.length) return;
 
     const xs = pts.map(p => p.x);
     const ys = pts.map(p => p.y);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-
-    const el = svgRef.current;
-    const cw = el.clientWidth  || 800;
-    const ch = el.clientHeight || 400;
-    const margin = 120; // SVG-space padding around the group
-    const contentW = (maxX - minX) + margin * 2;
-    const contentH = (maxY - minY) + margin * 2;
-    const scale = Math.min(cw / contentW, ch / contentH);
+    const el  = svgRef.current;
+    const cw  = el.clientWidth  || 800;
+    const ch  = el.clientHeight || 400;
+    const margin   = 80;
+    const contentW = (Math.max(...xs) - Math.min(...xs)) + margin * 2;
+    const contentH = (Math.max(...ys) - Math.min(...ys)) + margin * 2;
+    const scale    = Math.min(cw / contentW, ch / contentH);
     const vbW = cw / scale;
     const vbH = ch / scale;
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-
+    const cx  = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy  = (Math.min(...ys) + Math.max(...ys)) / 2;
     animateTo({ x: cx - vbW / 2, y: cy - vbH / 2, w: vbW, h: vbH });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
@@ -603,7 +670,7 @@ export default function App() {
           })}
 
           {/* Person nodes — circle portrait tiers */}
-          {Object.values(focusPeople).map(person => {
+          {Object.values(displayPeople).map(person => {
             const p = pos[person.id];
             if (!p) return null;
             if (hiddenIds.has(person.id)) return null;
@@ -613,41 +680,24 @@ export default function App() {
             const isPending = !!person.pending;
             const hasPendingEdit = !!person.pendingEdit;
 
-            // Tier: 1=subject, 2=immediate family, 3=everyone else
-            const tier = selected === null ? 2
-              : isSelected ? 1
-              : selectedFamily.has(person.id) ? 2
-              : 3;
-            const focused = focusId !== null;
-            const r = selected === null
-              ? (focused ? 26 : 20)
-              : tier === 1 ? (focused ? 34 : 28)
-              : tier === 2 ? (focused ? 26 : 20)
-              : (focused ? 14 : 12);
+            const r = nodeRadius[person.id] ?? 14;
 
             // Colors
             let fill   = isFemale ? '#1a0f06' : '#1C0E06';
             let stroke = isFemale ? '#D08A25' : '#B85E28';
             let txtClr = isFemale ? '#F0E8D8' : '#E8BF60';
-            let nodeOpacity = tier === 3 ? 0.7 : 1;
+            let nodeOpacity = 1;
             let sw = isSelected ? 2 : 1.5;
 
             if (isPending) { fill = '#160c04'; stroke = '#4a3020'; txtClr = '#6b4c2a'; }
 
             if (!isPending && highlight) {
-              if (highlight.mode === 'hover') {
-                if (person.id === highlight.id) { stroke = '#F0E8D8'; sw = 2.5; }
-                else if (highlight.spouseIds.has(person.id)) { stroke = '#D08A25'; }
-                else if (highlight.parentIds.has(person.id)) { stroke = '#B85E28'; }
-                else if (highlight.childIds.has(person.id)) { stroke = '#E8BF60'; }
-                else if (highlight.siblingIds.has(person.id)) { stroke = '#4AB8B0'; }
-                else { nodeOpacity = 0.2; }
-              } else {
-                if (person.id === highlight.id) { fill = '#2a1a08'; stroke = '#F0E8D8'; sw = 2.5; }
-                else if (highlight.ancestors.has(person.id)) { stroke = '#D08A25'; }
-                else if (highlight.descendants.has(person.id)) { stroke = '#E8BF60'; }
-                else { nodeOpacity = 0.12; }
-              }
+              if (person.id === highlight.id) { stroke = '#F0E8D8'; sw = 2.5; }
+              else if (highlight.spouseIds.has(person.id)) { stroke = '#D08A25'; }
+              else if (highlight.parentIds.has(person.id)) { stroke = '#B85E28'; }
+              else if (highlight.childIds.has(person.id)) { stroke = '#E8BF60'; }
+              else if (highlight.siblingIds.has(person.id)) { stroke = '#4AB8B0'; }
+              else { nodeOpacity = 0.25; }
             }
 
             const firstName = person.name.split(' ')[0];
