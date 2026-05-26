@@ -294,7 +294,7 @@ export default function App() {
   useEffect(() => {
     if (!Object.keys(people).length || focusId !== null) return;
     const tobe = Object.values(people).find(p => p.name.toLowerCase().includes('tobechukwu'));
-    if (tobe) setFocusId(tobe.id);
+    if (tobe) { setFocusId(tobe.id); setSelected(tobe.id); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [people]);
 
@@ -569,7 +569,7 @@ export default function App() {
         <FocusSearch
           people={people}
           focusId={focusId}
-          onChange={id => { setFocusId(id); setSelected(null); }}
+          onChange={id => { setFocusId(id); setSelected(id); }}
         />
         {/* ⋯ more menu */}
         <div style={{ position: 'relative' }}>
